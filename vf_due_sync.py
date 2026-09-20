@@ -62,7 +62,12 @@ DAYS_BACK = 30
 DAYS_AHEAD = 180
 
 # --- Google Calendar ---------------------------------------------------------
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+# calendar: create pickup events. gmail.send: send the daily digest.
+# gmail.send can only SEND mail -- it grants no ability to read the inbox.
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 TZ = ZoneInfo("America/New_York")
 CALENDAR_ID = os.environ.get(
     "VF_CALENDAR_ID",
@@ -362,7 +367,17 @@ def gcal_service(allow_interactive=False):
         if not (HERE / "credentials.json").exists():
             raise SyncError("credentials.json is missing from the project folder.")
         flow = InstalledAppFlow.from_client_secrets_file(str(HERE / "credentials.json"), SCOPES)
-        creds = flow.run_local_server(port=0)
+        # Two deliberate choices here:
+        #   host="127.0.0.1" -- the default is "localhost", which on macOS often
+        #     resolves to IPv6 ::1 while the server binds IPv4 only, so the
+        #     browser lands on "This site can't be reached" after consent.
+        #   open_browser=False -- run_local_server opens the OS default browser,
+        #     which may not be the one signed into the right Google account.
+        creds = flow.run_local_server(host="127.0.0.1", port=0, open_browser=False,
+                                      timeout_seconds=600,
+                                      authorization_prompt_message=
+                                      "\n>>> Open this URL in the browser signed "
+                                      "into the Workspace account:\n\n{url}\n")
         token_path.write_text(creds.to_json())
         token_path.chmod(0o600)
 
@@ -420,6 +435,21 @@ def load_existing_events(service, start_date, end_date):
     return {"all": events, "by_code": by_code, "by_day": by_day}
 
 
+def _edit_distance_1(a, b):
+    """True when a and b differ by at most one substitution/insert/delete."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long = (a, b) if len(a) < len(b) else (b, a)
+    for i in range(len(long)):
+        if short == long[:i] + long[i + 1:]:
+            return True
+    return False
+
+
 def find_match(job, index, claimed, jobs_per_client_day):
     """Locate an existing event for this order, widest-confidence first.
 
@@ -437,6 +467,17 @@ def find_match(job, index, claimed, jobs_per_client_day):
     for event in same_day:
         if wanted and canon(event_code(event)) == wanted:
             return event, "legacy code"
+
+    # Same client, same day, code off by a single character. Tesseract made
+    # errors outside the fold map too -- it read ABC12 as ABC1Z -- and without
+    # this the sync would insert a second event beside the damaged one.
+    # Deliberately narrow: same day AND same client AND one character.
+    for event in same_day:
+        existing_code = event_code(event)
+        if (existing_code
+                and job["client"].lower() in (event.get("summary") or "").lower()
+                and _edit_distance_1(job["job_code"], existing_code)):
+            return event, "near-miss code"
 
     # Client name alone is only safe when this client has exactly one pickup
     # that day and exactly one candidate event matches.

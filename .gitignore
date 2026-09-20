@@ -6,3 +6,5 @@ credentials.json
 __pycache__/
 .venv/
 last_run_report.json
+CALENDAR_CLEANUP.md
+auth_run.log
