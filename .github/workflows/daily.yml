@@ -1,0 +1,51 @@
+name: Daily pickup sync and digest
+
+on:
+  schedule:
+    # 11:00 UTC = 7am Eastern in summer, 6am in winter. GitHub cron has no
+    # timezone support, so this drifts an hour across DST. Harmless for a
+    # morning digest; change the hour if it ever matters.
+    - cron: "0 11 * * *"
+  workflow_dispatch:      # lets you run it by hand from the Actions tab
+
+jobs:
+  sync-and-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore Google credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials.json
+          printf '%s' "$GOOGLE_TOKEN_JSON" > token.json
+          chmod 600 credentials.json token.json
+
+      - name: Sync pickups, then send the digest
+        env:
+          VF_USERNAME: ${{ secrets.VF_USERNAME }}
+          VF_PASSWORD: ${{ secrets.VF_PASSWORD }}
+          VF_CALENDAR_ID: ${{ secrets.VF_CALENDAR_ID }}
+        run: ./run_daily.sh
+
+      # Keeps the machine-readable result even when the run failed, which is
+      # when you most want to look at it.
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-run-report
+          path: last_run_report.json
+          if-no-files-found: warn
+          retention-days: 30

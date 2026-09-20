@@ -8,11 +8,21 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-./.venv/bin/python vf_due_sync.py --live
+# Local runs use the venv; CI installs into the system interpreter.
+if [ -x ./.venv/bin/python ]; then
+  PY=./.venv/bin/python
+else
+  PY=python
+fi
+
+"$PY" vf_due_sync.py --live
 sync_status=$?
 
 # The digest runs even when the sync fails -- that is how anyone finds out.
-./.venv/bin/python send_digest.py --send
+"$PY" send_digest.py --send
 digest_status=$?
 
-exit $(( sync_status || digest_status ))
+if [ "$sync_status" -ne 0 ] || [ "$digest_status" -ne 0 ]; then
+  echo "run_daily: sync=$sync_status digest=$digest_status"
+  exit 1
+fi
