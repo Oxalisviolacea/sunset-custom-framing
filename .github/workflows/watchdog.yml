@@ -12,9 +12,6 @@ on:
   schedule:
     - cron: "7 17 * * *"   # 1:07pm EDT
     - cron: "7 18 * * *"   # 1:07pm EST
-    # TEMPORARY test slots -- remove after today
-    - cron: "5 15 * * *"
-    - cron: "10 15 * * *"
   workflow_dispatch:
 
 permissions:
@@ -32,7 +29,6 @@ jobs:
           offset=$(TZ=America/New_York date +%z)
           sched="${{ github.event.schedule }}"
           case "$sched" in
-            "5 15 * * *"|"10 15 * * *") ok=yes ;;                       # test slots
             "7 17 * * *") [ "$offset" = "-0400" ] && ok=yes || ok=no ;;
             "7 18 * * *") [ "$offset" = "-0500" ] && ok=yes || ok=no ;;
             *) ok=yes ;;                                                # manual

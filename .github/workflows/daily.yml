@@ -12,10 +12,6 @@ on:
     # runs there are routinely delayed and sometimes dropped.
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
-    # TEMPORARY test slots -- remove after today
-    - cron: "45 14 * * *"
-    - cron: "50 14 * * *"
-    - cron: "55 14 * * *"
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 jobs:
@@ -41,9 +37,6 @@ jobs:
           elif [ "$sched" = "7 14 * * *" ] && [ "$offset" = "-0400" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "EDT slot, proceeding (local time ${local_time}, offset ${offset})."
-          elif [ "$sched" = "45 14 * * *" ] || [ "$sched" = "50 14 * * *" ] || [ "$sched" = "55 14 * * *" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "TEMPORARY test slot '${sched}', proceeding (local ${local_time})."
           elif [ "$sched" = "7 15 * * *" ] && [ "$offset" = "-0500" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "EST slot, proceeding (local time ${local_time}, offset ${offset})."
