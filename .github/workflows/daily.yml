@@ -53,6 +53,7 @@ jobs:
       # should get two digests.
       - name: Has a run already succeeded today?
         id: dedupe
+        if: steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -118,7 +119,7 @@ jobs:
       # Keeps the machine-readable result even when the run failed, which is
       # when you most want to look at it.
       - name: Upload run report
-        if: always() && steps.dedupe.outputs.skip != 'true'
+        if: always() && steps.gate.outputs.run == 'true' && steps.dedupe.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: last-run-report
