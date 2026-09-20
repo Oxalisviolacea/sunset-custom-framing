@@ -4,3 +4,5 @@
 token.json
 credentials.json
 __pycache__/
+.venv/
+last_run_report.json

@@ -40,15 +40,22 @@ VF_ENDPOINT = f"{VF_ORIGIN}/prod-api/companyProjects/web/pinned/withoutPrice"
 # to the web UI is what makes our row set match what you see on screen.
 EXCLUDE_DELIVERED = "1,4,6"
 
-VF_LOGIN_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/loginWebApp"
+VF_LOGIN_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/login"
+VF_USERINFO_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/users/checkUserInfo"
 TOKEN_CACHE = HERE / ".vf_token.json"
 
-# Confirmed by probing the live endpoint: query parameters (not a JSON body),
-# and the user field is "userName" with a capital N. Anything else comes back
-# 406 "Parameter error"; these come back 400 "Wrong password", which means the
-# server parsed the request and got as far as checking the credentials.
-USER_FIELD = "userName"
-PASS_FIELD = "password"
+# Confirmed against the live endpoint and the app's own bundle, which ships
+# unminified comments. Its login helper reads:
+#
+#     const Login = (params, isDefult = false) => {
+#       params.pwd = params.password;
+#       return service({ url: isDefult ? '/api/loginWebApp' : '/api/login',
+#                        method: 'POST', params });
+#     };
+#
+# So: query parameters (not a JSON body), "userName" with a capital N, and the
+# password sent twice -- as both `password` and `pwd`. Sending only `password`
+# returns 400 "Wrong password" even when the password is correct.
 
 # How wide a pickup window to sync, relative to today.
 DAYS_BACK = 30
@@ -75,6 +82,13 @@ DONE_WORDS = ["done", "paid", "picked up", "complete", "completed"]
 # Refuse to run live if the feed returns fewer than this. The old script's
 # fatal flaw was treating "parsed nothing" as success.
 MIN_EXPECTED_JOBS = 1
+
+# Written on every run, success or failure, for the daily digest email to read.
+REPORT_PATH = HERE / "last_run_report.json"
+
+
+class SyncError(Exception):
+    """Anything that should end the run and appear in the digest."""
 
 
 # ============================== Virtual Framer ===============================
@@ -146,35 +160,41 @@ def _extract_token(payload):
 
 
 def vf_login(username, password):
-    """Log in and return (token, companyId).
-
-    One attempt only. Retrying with different shapes would just be repeated
-    failed logins against a real account, which is how you get locked out.
-    """
+    """Log in, then look up the company id. Returns (token, companyId)."""
     if not username or not password:
-        sys.exit("ERROR: set VF_USERNAME and VF_PASSWORD in .env")
+        raise SyncError("VF_USERNAME / VF_PASSWORD are not set in .env")
 
-    params = {USER_FIELD: username, PASS_FIELD: password,
-              "deviceOs": "backend", "language": "3"}
+    common = {"deviceOs": "backend", "language": "3"}
+    params = {"userName": username, "password": password, "pwd": password, **common}
+
     try:
         resp = requests.post(VF_LOGIN_ENDPOINT, params=params, timeout=30)
+        payload = resp.json()
     except requests.RequestException as exc:
-        sys.exit(f"ERROR: could not reach Virtual Framer: {exc}")
+        raise SyncError(f"could not reach Virtual Framer: {exc}") from exc
+    except ValueError:
+        raise SyncError(f"login returned HTTP {resp.status_code}, not JSON")
+
+    token = (payload.get("data") or {}).get("token")
+    if not token:
+        # One attempt only. Retrying would just be repeated failed logins
+        # against a real account, which is how you get locked out.
+        raise SyncError(f"login rejected -- code={payload.get('code')} "
+                        f"msg={payload.get('msg')!r}")
 
     try:
-        payload = resp.json()
-    except ValueError:
-        sys.exit(f"ERROR: login returned HTTP {resp.status_code}, not JSON.")
+        info = requests.get(VF_USERINFO_ENDPOINT,
+                            params={"token": token, **common}, timeout=30).json()
+        company_id = (info.get("data") or {}).get("companyId")
+    except (requests.RequestException, ValueError):
+        company_id = None
 
-    token, company = _extract_token(payload)
-    if not token:
-        sys.exit(
-            f"ERROR: login failed -- code={payload.get('code')} "
-            f"msg={payload.get('msg')!r}.\n"
-            "  400 'Wrong password' means the endpoint and field names are right\n"
-            "  and VF_PASSWORD in .env is not the correct password."
-        )
-    return token, str(company or payload.get("companyId"))
+    if not company_id:
+        raise SyncError("logged in but could not read companyId from "
+                        "/api/users/checkUserInfo")
+
+    print(f"Logged in as {username} (company {company_id}).")
+    return token, str(company_id)
 
 
 def get_vf_credentials():
@@ -189,7 +209,7 @@ def get_vf_credentials():
     return token, company_id
 
 
-def fetch_rows(token, company_id):
+def fetch_rows(token, company_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD):
     now = datetime.now(TZ)
     params = {
         "isPin": "1",
@@ -199,51 +219,75 @@ def fetch_rows(token, company_id):
         "projectCompanyId": company_id,
         "limit": "500",
         "page": "1",
-        "startPickupDate": (now - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%d 00:00:00"),
-        "endPickupDate": (now + timedelta(days=DAYS_AHEAD)).strftime("%Y-%m-%d 23:59:59"),
+        "startPickupDate": (now - timedelta(days=days_back)).strftime("%Y-%m-%d 00:00:00"),
+        "endPickupDate": (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d 23:59:59"),
         "token": token,
         "companyId": company_id,
         "deviceOs": "backend",
         "language": "3",
     }
-    resp = requests.get(VF_ENDPOINT, params=params, timeout=60)
-    resp.raise_for_status()
-    body = resp.json()
+    try:
+        resp = requests.get(VF_ENDPOINT, params=params, timeout=60)
+        resp.raise_for_status()
+        body = resp.json()
+    except requests.RequestException as exc:
+        raise SyncError(f"orders request failed: {exc}") from exc
+    except ValueError as exc:
+        raise SyncError(f"orders request returned non-JSON (HTTP {resp.status_code})") from exc
 
     if body.get("code") != 200:
-        sys.exit(f"ERROR: Virtual Framer returned code={body.get('code')} msg={body.get('msg')!r}")
+        raise SyncError(f"API returned code={body.get('code')} msg={body.get('msg')!r}")
 
     rows = body.get("data") or []
     count = body.get("count")
     if count is not None and count != len(rows):
-        print(f"WARNING: API reports count={count} but returned {len(rows)} rows — possible pagination.")
+        raise SyncError(f"API reports count={count} but returned {len(rows)} rows "
+                        "-- the result is truncated or paginated")
     return rows
 
 
 def to_jobs(rows):
-    """Map API rows to calendar jobs, reporting anything unusable rather than
-    dropping it on the floor."""
-    jobs, skipped = [], []
+    """Map API rows to calendar jobs.
+
+    Returns (jobs, flags). A flag is a dict, not a sentence, because the daily
+    digest email has to render it. A row missing its artwork code or pickup
+    date is a data problem worth a human looking at -- never a quiet skip.
+    """
+    jobs, flags = [], []
+
+    def flag(reason, row, code=""):
+        flags.append({
+            "reason": reason,
+            "artworkCode": code or None,
+            "project": row.get("projectName"),
+            "client": row.get("clientName"),
+            "artwork": row.get("artworkName"),
+            "pickDate": row.get("pickDate"),
+            "projectId": row.get("parentId") or row.get("id"),
+        })
 
     for row in rows:
-        code = (row.get("randomReference") or "").strip().upper()
+        # vfReference is the artwork code (ABC12). randomReference is present in
+        # the payload but always null -- do not trust it.
+        code = (row.get("vfReference") or row.get("randomReference") or "").strip().upper()
         client = (row.get("clientName") or "").strip()
         raw_pick = row.get("pickDate")
 
         if not code:
-            skipped.append(f"no artwork code (projectId={row.get('parentId')}, client={client!r})")
+            flag("missing artwork code", row)
             continue
         if not raw_pick:
-            skipped.append(f"{code}: no pickDate")
+            flag("missing pickup date", row, code)
             continue
         if not client:
+            flag("missing client name", row, code)
             client = "(no client)"
 
         # pickDate is UTC at local midnight: "2026-10-10 04:00:00" is Oct 10 EDT.
         try:
             pick_utc = datetime.strptime(raw_pick, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         except ValueError:
-            skipped.append(f"{code}: unparseable pickDate {raw_pick!r}")
+            flag(f"unparseable pickup date {raw_pick!r}", row, code)
             continue
         pickup_date = pick_utc.astimezone(TZ).date()
 
@@ -255,16 +299,17 @@ def to_jobs(rows):
             "title": f"PICKUP — {client} — {code}",
         })
 
-    # Artwork codes are unique per row; a collision means the feed changed shape.
-    by_code = {}
+    seen = {}
     for job in jobs:
-        if job["job_code"] in by_code:
-            skipped.append(f"{job['job_code']}: duplicate artwork code, keeping first")
+        if job["job_code"] in seen:
+            flags.append({"reason": "duplicate artwork code in feed",
+                          "artworkCode": job["job_code"], "client": job["client"],
+                          "project": None, "artwork": job["artwork"],
+                          "pickDate": str(job["pickup_date"]), "projectId": None})
             continue
-        by_code[job["job_code"]] = job
+        seen[job["job_code"]] = job
 
-    jobs = sorted(by_code.values(), key=lambda j: j["pickup_date"])
-    return jobs, skipped
+    return sorted(seen.values(), key=lambda j: j["pickup_date"]), flags
 
 
 # ============================== Google Calendar ==============================
@@ -299,7 +344,7 @@ def title_looks_done(title, client=""):
     return bool(DONE_RE.search(probe))
 
 
-def gcal_service():
+def gcal_service(allow_interactive=False):
     creds = None
     token_path = HERE / "token.json"
 
@@ -309,9 +354,17 @@ def gcal_service():
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
     elif not creds or not creds.valid:
+        if not allow_interactive:
+            raise SyncError(
+                "no valid Google token. Run once with --auth to grant access "
+                "(that opens a browser); after that it runs unattended."
+            )
+        if not (HERE / "credentials.json").exists():
+            raise SyncError("credentials.json is missing from the project folder.")
         flow = InstalledAppFlow.from_client_secrets_file(str(HERE / "credentials.json"), SCOPES)
         creds = flow.run_local_server(port=0)
         token_path.write_text(creds.to_json())
+        token_path.chmod(0o600)
 
     return build("calendar", "v3", credentials=creds)
 
@@ -447,80 +500,110 @@ def upsert_event(service, job, index, claimed, jobs_per_client_day, dry_run):
 
 # ==================================== main ===================================
 
+def write_report(report):
+    """Always leave a machine-readable record behind, success or failure."""
+    report["finished_at"] = datetime.now(TZ).isoformat()
+    try:
+        REPORT_PATH.write_text(json.dumps(report, indent=2, default=str))
+    except OSError as exc:
+        print(f"WARNING: could not write {REPORT_PATH.name}: {exc}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--live", action="store_true",
                     help="actually write to Google Calendar (default is a dry run)")
     ap.add_argument("--days-ahead", type=int, default=DAYS_AHEAD)
     ap.add_argument("--days-back", type=int, default=DAYS_BACK)
+    ap.add_argument("--auth", action="store_true",
+                    help="allow the Google consent browser window to open "
+                         "(one-time setup; never use this from cron)")
     args = ap.parse_args()
-
-    global DAYS_AHEAD, DAYS_BACK
-    DAYS_AHEAD, DAYS_BACK = args.days_ahead, args.days_back
     dry_run = not args.live
 
-    token, company_id = get_vf_credentials()
-    exp = _jwt_expiry(token)
-    if exp:
-        days_left = (exp - time.time()) / 86400
-        print(f"Virtual Framer session valid for {days_left:.1f} more days (company {company_id}).")
+    report = {
+        "started_at": datetime.now(TZ).isoformat(),
+        "dry_run": dry_run,
+        "status": "failed",
+        "rows_from_api": 0,
+        "jobs_usable": 0,
+        "flags": [],
+        "errors": [],
+        "actions": {},
+    }
 
-    rows = fetch_rows(token, company_id)
-    jobs, skipped = to_jobs(rows)
+    try:
+        token, company_id = get_vf_credentials()
+        report["companyId"] = company_id
 
-    print(f"Rows from API: {len(rows)}   ->   usable jobs: {len(jobs)}")
-    if skipped:
-        print(f"Skipped {len(skipped)}:")
-        for reason in skipped:
-            print(f"  - {reason}")
+        rows = fetch_rows(token, company_id, args.days_back, args.days_ahead)
+        jobs, flags = to_jobs(rows)
+        report["rows_from_api"] = len(rows)
+        report["jobs_usable"] = len(jobs)
+        report["flags"] = flags
 
-    if len(jobs) < MIN_EXPECTED_JOBS:
-        sys.exit(
-            f"ERROR: only {len(jobs)} job(s) parsed, expected at least {MIN_EXPECTED_JOBS}. "
-            "The feed shape probably changed. Refusing to sync."
-        )
+        print(f"Rows from API: {len(rows)}   ->   usable jobs: {len(jobs)}")
+        for f in flags:
+            print(f"  FLAG {f['reason']}: project={f['project']!r} "
+                  f"client={f['client']!r} code={f['artworkCode']!r}")
 
-    if dry_run:
-        print("\n--- DRY RUN (pass --live to write) ---")
+        if len(jobs) < MIN_EXPECTED_JOBS:
+            raise SyncError(f"only {len(jobs)} usable job(s) from {len(rows)} rows; "
+                            "refusing to sync")
 
-    service = gcal_service()
+        service = gcal_service(args.auth)
 
-    jobs_per_client_day = {}
-    for job in jobs:
-        key = (job["client"], job["pickup_date"])
-        jobs_per_client_day[key] = jobs_per_client_day.get(key, 0) + 1
+        jobs_per_client_day = {}
+        for job in jobs:
+            key = (job["client"], job["pickup_date"])
+            jobs_per_client_day[key] = jobs_per_client_day.get(key, 0) + 1
 
-    collisions = {}
-    for job in jobs:
-        collisions.setdefault(canon(job["job_code"]), []).append(job["job_code"])
-    for folded, codes in collisions.items():
-        if len(codes) > 1:
-            print(f"WARNING: codes {codes} are indistinguishable after OCR folding.")
+        folded = {}
+        for job in jobs:
+            folded.setdefault(canon(job["job_code"]), []).append(job["job_code"])
+        for codes in folded.values():
+            if len(codes) > 1:
+                report["flags"].append({"reason": "codes indistinguishable after folding",
+                                        "artworkCode": ", ".join(codes)})
+                print(f"WARNING: codes {codes} are indistinguishable after folding.")
 
-    index = load_existing_events(service, jobs[0]["pickup_date"], jobs[-1]["pickup_date"])
-    print(f"Existing events in window: {len(index['all'])}")
+        index = load_existing_events(service, jobs[0]["pickup_date"], jobs[-1]["pickup_date"])
+        report["existing_events_in_window"] = len(index["all"])
+        print(f"Existing events in window: {len(index['all'])}")
 
-    claimed = set()
-    tally = {}
-    errors = 0
+        if dry_run:
+            print("\n--- DRY RUN (pass --live to write) ---")
 
-    for job in jobs:
-        try:
-            result = upsert_event(service, job, index, claimed,
-                                  jobs_per_client_day, dry_run)
+        claimed, tally = set(), {}
+        for job in jobs:
+            try:
+                result = upsert_event(service, job, index, claimed,
+                                      jobs_per_client_day, dry_run)
+            except Exception as exc:
+                result = "error"
+                report["errors"].append({"stage": "calendar", "job": job["job_code"],
+                                         "message": str(exc)})
+                print(f"  ERROR {job['title']}: {exc}")
             tally[result] = tally.get(result, 0) + 1
-            print(f"  {job['pickup_date']:%m/%d/%Y}  {result:<14} {job['title']}")
-        except Exception as exc:
-            errors += 1
-            print(f"  ERROR: {job['title']} -> {exc}")
+            if result != "error":
+                print(f"  {job['pickup_date']:%m/%d/%Y}  {result:<26} {job['title']}")
 
-    print("\n" + "  ".join(f"{k}={v}" for k, v in sorted(tally.items())) + f"  errors={errors}")
-    if dry_run:
-        print("Dry run complete — nothing was written.")
-    else:
-        print("Sync complete.")
+        report["actions"] = tally
+        report["status"] = "ok_with_flags" if (flags or report["errors"]) else "ok"
+        print("\n" + "  ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+        print("Dry run complete — nothing was written." if dry_run else "Sync complete.")
 
-    sys.exit(1 if errors else 0)
+    except SyncError as exc:
+        report["errors"].append({"stage": "sync", "message": str(exc)})
+        print(f"ERROR: {exc}")
+    except Exception as exc:  # never let the cron job die without a report
+        report["errors"].append({"stage": "unexpected",
+                                 "message": f"{type(exc).__name__}: {exc}"})
+        print(f"UNEXPECTED ERROR: {type(exc).__name__}: {exc}")
+
+    write_report(report)
+    print(f"Report written to {REPORT_PATH.name} (status: {report['status']})")
+    sys.exit(0 if report["status"].startswith("ok") and not report["errors"] else 1)
 
 
 if __name__ == "__main__":
