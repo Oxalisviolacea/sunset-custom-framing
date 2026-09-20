@@ -78,8 +78,8 @@ def table(rows, colour=None):
     return "".join(html)
 
 
-def build_html(past_due, upcoming, follow_ups, problems, now):
-    all_clear = not past_due and not problems
+def build_html(past_due, upcoming, follow_ups, errors, attention, now):
+    all_clear = not past_due and not errors and not attention
     h = ["<h2>Production Digest</h2>", f"<p>As of {now:%b %d, %Y %-I:%M %p}</p>"]
 
     if all_clear:
@@ -91,11 +91,22 @@ def build_html(past_due, upcoming, follow_ups, problems, now):
             'All clear &mdash; nothing past due and nothing needing attention.</p>'
             '</div>')
 
-    if problems:
-        h.append('<h3 style="color:#d93025;">NEEDS ATTENTION:</h3>')
-        h.append('<ul style="color:#d93025;">')
-        for p in problems:
-            h.append(f"<li>{p}</li>")
+    if errors:
+        h.append('<h3 style="color:#b00020;">ERRORS:</h3>')
+        h.append('<p style="margin:0 0 8px; color:#b00020;">'
+                 'The sync itself failed. Pickup events may be out of date.</p>')
+        h.append('<ul style="color:#b00020;">')
+        for e in errors:
+            h.append(f"<li>{e}</li>")
+        h.append("</ul>")
+
+    if attention:
+        h.append('<h3 style="color:#b06000;">NEEDS ATTENTION:</h3>')
+        h.append('<p style="margin:0 0 8px; color:#b06000;">'
+                 'These records need fixing in Virtual Framer.</p>')
+        h.append('<ul style="color:#b06000;">')
+        for a in attention:
+            h.append(f"<li>{a}</li>")
         h.append("</ul>")
 
     h.append("<h3>PAST DUE:</h3>")
@@ -110,25 +121,32 @@ def build_html(past_due, upcoming, follow_ups, problems, now):
     return "".join(h)
 
 
-def gather_problems():
-    """Blocking flags and errors from the sync's last run."""
-    problems = []
+def gather_from_report():
+    """Split the sync's last run into two kinds of trouble.
+
+    ERRORS are the software failing -- a rejected login, a dead network, a
+    truncated response. Nobody at the shop can fix those.
+
+    NEEDS ATTENTION is data the shop has to correct in Virtual Framer, like an
+    order with no pickup date. The software is working fine; the record is not.
+    """
+    errors, attention = [], []
     try:
         report = json.loads(sync.REPORT_PATH.read_text())
     except (OSError, ValueError):
-        return ["Could not read last_run_report.json — did vf_due_sync.py run?"]
+        return (["Could not read last_run_report.json — did vf_due_sync.py run?"], [])
 
     for err in report.get("errors", []):
-        problems.append(f"Sync error ({err.get('stage')}): {err.get('message')}")
+        errors.append(f"{err.get('stage', 'sync')}: {err.get('message')}")
     for flag in report.get("flags", []):
         if flag.get("severity") != "blocking":
             continue
-        problems.append(
+        attention.append(
             f"{flag.get('reason')} — {flag.get('client') or 'unknown client'}"
             f" (artwork {flag.get('artworkCode') or '?'},"
             f" project {flag.get('project') or '?'}) — no calendar event exists"
         )
-    return problems
+    return errors, attention
 
 
 def main():
@@ -148,26 +166,34 @@ def main():
         cal = sync.gcal_service()
         follow_ups = collect_follow_ups(cal, today)
 
-        problems = gather_problems()
-        problems += [f"{f['reason']} — {f.get('client') or 'unknown'}"
-                     for f in flags if f.get("severity") == "blocking"]
-        problems = list(dict.fromkeys(problems))
+        errors, attention = gather_from_report()
+        attention += [f"{f['reason']} — {f.get('client') or 'unknown'}"
+                      for f in flags if f.get("severity") == "blocking"]
+        attention = list(dict.fromkeys(attention))
+        errors = list(dict.fromkeys(errors))
 
         now = datetime.datetime.now(sync.TZ)
-        html = build_html(past_due, upcoming, follow_ups, problems, now)
-        if not past_due and not problems:
+        html = build_html(past_due, upcoming, follow_ups, errors, attention, now)
+        if not past_due and not errors and not attention:
             subject = (f"\U0001F388 Production Digest — all clear "
                        f"(Upcoming: {len(upcoming)}, Follow Ups: {len(follow_ups)})")
         else:
-            subject = (f"Production Digest (Past Due: {len(past_due)}, "
-                       f"Upcoming: {len(upcoming)}, Follow Ups: {len(follow_ups)}"
-                       + (f", NEEDS ATTENTION: {len(problems)}" if problems else "") + ")")
+            bits = [f"Past Due: {len(past_due)}", f"Upcoming: {len(upcoming)}",
+                    f"Follow Ups: {len(follow_ups)}"]
+            if attention:
+                bits.append(f"Needs Attention: {len(attention)}")
+            if errors:
+                bits.insert(0, f"ERRORS: {len(errors)}")
+            subject = "Production Digest (" + ", ".join(bits) + ")"
 
         print(subject)
-        print(f"  past due={len(past_due)}  upcoming={len(upcoming)} "
-              f" follow ups={len(follow_ups)}  problems={len(problems)}")
-        for p in problems:
-            print(f"    ! {p}")
+        print(f"  Past Due: {len(past_due)}   Upcoming: {len(upcoming)}   "
+              f"Follow Ups: {len(follow_ups)}   "
+              f"Needs Attention: {len(attention)}   Errors: {len(errors)}")
+        for e in errors:
+            print(f"    ERROR  {e}")
+        for a in attention:
+            print(f"    ATTN   {a}")
 
         if dry_run:
             sync.HERE.joinpath("digest_preview.html").write_text(html)
