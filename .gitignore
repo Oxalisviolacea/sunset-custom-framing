@@ -1,3 +1,4 @@
+.env
 .vf_browser_profile/
 .vf_token.json
 token.json

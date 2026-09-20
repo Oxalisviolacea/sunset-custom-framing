@@ -40,8 +40,15 @@ VF_ENDPOINT = f"{VF_ORIGIN}/prod-api/companyProjects/web/pinned/withoutPrice"
 # to the web UI is what makes our row set match what you see on screen.
 EXCLUDE_DELIVERED = "1,4,6"
 
-PROFILE_DIR = HERE / ".vf_browser_profile"   # persists the logged-in session
+VF_LOGIN_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/loginWebApp"
 TOKEN_CACHE = HERE / ".vf_token.json"
+
+# Confirmed by probing the live endpoint: query parameters (not a JSON body),
+# and the user field is "userName" with a capital N. Anything else comes back
+# 406 "Parameter error"; these come back 400 "Wrong password", which means the
+# server parsed the request and got as far as checking the credentials.
+USER_FIELD = "userName"
+PASS_FIELD = "password"
 
 # How wide a pickup window to sync, relative to today.
 DAYS_BACK = 30
@@ -60,7 +67,10 @@ EVENT_DURATION_MIN = 30
 # Marking an event done by hand in Google Calendar tells this script to leave
 # it alone. Carried over from the original script — it is a manual override, so
 # a sync must never clobber it.
-DONE_WORDS = ["done", "paid", "picked up", "complete", "completed", "collected"]
+# Verbatim from the original script, plus "completed": the original used a
+# substring test where "complete" already matched "completed", and the
+# word-boundary test below would otherwise silently narrow the behaviour.
+DONE_WORDS = ["done", "paid", "picked up", "complete", "completed"]
 
 # Refuse to run live if the feed returns fewer than this. The old script's
 # fatal flaw was treating "parsed nothing" as success.
@@ -99,36 +109,72 @@ def _read_cached_token():
     return None, None
 
 
-def _harvest_token(headless):
-    """Open the app in a persistent browser profile and read its localStorage.
+def load_env():
+    """Minimal .env reader -- avoids a dependency for four keys."""
+    env = {}
+    path = HERE / ".env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip().strip('"').strip("\'")
+    return {k: os.environ.get(k) or env.get(k, "") for k in
+            ("VF_USERNAME", "VF_PASSWORD", "VF_CALENDAR_ID", "GOOGLE_SERVICE_ACCOUNT_FILE")}
 
-    Headless succeeds whenever the saved profile still holds a live session.
-    When it doesn't, we reopen headed so you can log in by hand, once, and the
-    profile carries that session for the next ~30 days.
+
+def _extract_token(payload):
+    """Find the JWT and company id anywhere in a login response."""
+    token = company = None
+
+    def walk(node):
+        nonlocal token, company
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, str) and value.startswith("eyJ") and value.count(".") == 2:
+                    token = token or value
+                if key.lower() in ("companyid", "company_id") and value:
+                    company = company or str(value)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    return token, company
+
+
+def vf_login(username, password):
+    """Log in and return (token, companyId).
+
+    One attempt only. Retrying with different shapes would just be repeated
+    failed logins against a real account, which is how you get locked out.
     """
-    from playwright.sync_api import sync_playwright
+    if not username or not password:
+        sys.exit("ERROR: set VF_USERNAME and VF_PASSWORD in .env")
 
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(str(PROFILE_DIR), headless=headless)
-        try:
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto(VF_APP_URL, wait_until="domcontentloaded")
+    params = {USER_FIELD: username, PASS_FIELD: password,
+              "deviceOs": "backend", "language": "3"}
+    try:
+        resp = requests.post(VF_LOGIN_ENDPOINT, params=params, timeout=30)
+    except requests.RequestException as exc:
+        sys.exit(f"ERROR: could not reach Virtual Framer: {exc}")
 
-            deadline = time.time() + (20 if headless else 300)
-            while time.time() < deadline:
-                token = page.evaluate("() => localStorage.getItem('VEA-TOKEN')")
-                company_id = page.evaluate(
-                    "() => (localStorage.getItem('VEA-COMPANYID')"
-                    " || localStorage.getItem('companyId') || '').replace(/\"/g,'')"
-                )
-                if token and company_id and _token_is_fresh(token):
-                    TOKEN_CACHE.write_text(json.dumps({"token": token, "companyId": company_id}))
-                    TOKEN_CACHE.chmod(0o600)
-                    return token, company_id
-                page.wait_for_timeout(1000)
-            return None, None
-        finally:
-            ctx.close()
+    try:
+        payload = resp.json()
+    except ValueError:
+        sys.exit(f"ERROR: login returned HTTP {resp.status_code}, not JSON.")
+
+    token, company = _extract_token(payload)
+    if not token:
+        sys.exit(
+            f"ERROR: login failed -- code={payload.get('code')} "
+            f"msg={payload.get('msg')!r}.\n"
+            "  400 'Wrong password' means the endpoint and field names are right\n"
+            "  and VF_PASSWORD in .env is not the correct password."
+        )
+    return token, str(company or payload.get("companyId"))
 
 
 def get_vf_credentials():
@@ -136,14 +182,10 @@ def get_vf_credentials():
     if token:
         return token, company_id
 
-    token, company_id = _harvest_token(headless=True)
-    if token:
-        return token, company_id
-
-    print("No live Virtual Framer session. Opening a browser — please log in.")
-    token, company_id = _harvest_token(headless=False)
-    if not token:
-        sys.exit("ERROR: never saw a Virtual Framer token. Aborting without touching the calendar.")
+    env = load_env()
+    token, company_id = vf_login(env["VF_USERNAME"], env["VF_PASSWORD"])
+    TOKEN_CACHE.write_text(json.dumps({"token": token, "companyId": company_id}))
+    TOKEN_CACHE.chmod(0o600)
     return token, company_id
 
 
@@ -376,26 +418,27 @@ def build_body(job):
 
 
 def upsert_event(service, job, index, claimed, jobs_per_client_day, dry_run):
+    """Insert an event when the order has none. Never modify one that exists.
+
+    The shop marks events up by hand -- renaming them, annotating the body,
+    flagging them done or finished in whatever words they like. That record is
+    theirs. A sync that rewrote it would destroy their process, so the only
+    write this function ever performs is an insert for an order that has no
+    event at all.
+    """
     existing, how = find_match(job, index, claimed, jobs_per_client_day)
-    body = build_body(job)
 
     if existing:
         claimed.add(existing["id"])
-
         old_title = (existing.get("summary") or "").strip()
         if title_looks_done(old_title, job["client"]):
-            return "skipped_done"
-
-        if dry_run:
-            return f"would_update ({how})"
-        service.events().patch(
-            calendarId=CALENDAR_ID, eventId=existing["id"], body=body
-        ).execute()
-        return f"updated ({how})"
+            return f"exists, marked done ({how})"
+        return f"exists ({how})"
 
     if dry_run:
         return "would_insert"
 
+    body = build_body(job)
     body["reminders"] = {"useDefault": True}
     created = service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
     claimed.add(created["id"])
