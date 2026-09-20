@@ -69,6 +69,23 @@ That writes `digest_preview.html`. Open it in a browser.
 
 ---
 
+## Changing the credentials
+
+`.env` is a plain text file. Open it in any editor and change what you need:
+
+    VF_USERNAME=...        the Virtual Framer login
+    VF_PASSWORD=...        change this when the pickup-system password changes
+    VF_CALENDAR_ID=...     leave this alone unless the calendar itself changes
+
+No quotes needed around the values. Save it and the next run picks it up.
+
+If the daily GitHub run should use the new value too, update the stored copy:
+
+    gh secret set VF_PASSWORD
+
+and paste it when prompted. Editing `.env` only affects runs on your own
+machine — the 10am job reads from GitHub's secrets, not from your file.
+
 ## About token.json
 
 It is signed in as DIGEST_TO_ADDRESS. Anything done with it —
