@@ -16,6 +16,11 @@ on:
     - cron: "23 14 * * *"
     - cron: "23 15 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Send even if a run already succeeded today"
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -63,7 +68,10 @@ jobs:
                     --workflow daily.yml --status success --limit 30 \
                     --json createdAt --jq "[.[] | select(.createdAt >= \"${today}\")] | length" \
                   || echo 0)
-          if [ "${count:-0}" -gt 0 ]; then
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Forced: running even though ${count:-0} run(s) succeeded today."
+          elif [ "${count:-0}" -gt 0 ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Already succeeded ${count} time(s) today; skipping so nobody gets a second email."
           else
