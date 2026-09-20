@@ -7,7 +7,9 @@ on:
     # Fire at both candidate hours -- 14:00 UTC is 10am EDT, 15:00 UTC is 10am
     # EST -- and let the gate step below drop whichever one is the wrong hour
     # locally. Exactly one runs on any given day.
-    - cron: "25 3 * * *"   # TEMPORARY test fire — reverted right after
+    - cron: "15 3 * * *"   # TEMPORARY test fire
+    - cron: "20 3 * * *"   # TEMPORARY backup, in case GitHub misses the first
+    - cron: "25 3 * * *"   # TEMPORARY backup
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 jobs:
