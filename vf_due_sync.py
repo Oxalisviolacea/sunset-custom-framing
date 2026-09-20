@@ -57,8 +57,11 @@ TOKEN_CACHE = HERE / ".vf_token.json"
 # password sent twice -- as both `password` and `pwd`. Sending only `password`
 # returns 400 "Wrong password" even when the password is correct.
 
-# How wide a pickup window to sync, relative to today.
-DAYS_BACK = 30
+# How wide a pickup window to sync, relative to today. 90 days back because
+# overdue pickups stay open in Virtual Framer and still need to be on the
+# calendar; anything older than that is stale and belongs in the digest email
+# rather than on a calendar date nobody scrolls back to.
+DAYS_BACK = 90
 DAYS_AHEAD = 180
 
 # --- Google Calendar ---------------------------------------------------------
