@@ -155,18 +155,9 @@ def _read_cached_token():
 
 
 def load_env():
-    """Minimal .env reader -- avoids a dependency for four keys."""
-    env = {}
-    path = HERE / ".env"
-    if path.exists():
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            env[key.strip()] = value.strip().strip('"').strip("\'")
-    return {k: os.environ.get(k) or env.get(k, "") for k in
-            ("VF_USERNAME", "VF_PASSWORD", "VF_CALENDAR_ID", "GOOGLE_SERVICE_ACCOUNT_FILE")}
+    """The settings, read from the environment (.env was folded in at import)."""
+    return {k: os.environ.get(k, "") for k in
+            ("VF_USERNAME", "VF_PASSWORD", "VF_CALENDAR_ID")}
 
 
 def _extract_token(payload):
