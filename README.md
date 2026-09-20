@@ -162,15 +162,32 @@ changed. Fix it there, then:
 
 and paste the new password when prompted.
 
+## What schedules it
+
+**Google Apps Script**, not GitHub. GitHub's own cron never fired for this
+repository — a known bug affecting new private repos on Free plans (community
+discussions 202602, 203822, 205984 and others, all unanswered, no fix). The
+workflow has no `schedule:` any more; it only runs when dispatched.
+
+`trigger/AppsScriptTrigger.gs` holds two time triggers:
+
+| When | Function | What it does |
+|---|---|---|
+| 10am | `fireDailySync` | starts the job on GitHub, emails if it cannot |
+| 11am | `checkDailySyncRan` | confirms it succeeded, emails if it did not |
+
+GitHub still does all the work. It is simply not asked to know what time it is.
+
 ## What happens when it does not run at all
 
 The digest can only report a problem if the script ran. When GitHub drops the
 scheduled job — which it does occasionally — nothing runs, nothing is caught,
 and nothing is sent. Silence looks exactly like success. Two things cover that:
 
-**`watchdog.yml`** runs at 1pm Eastern, asks the GitHub API whether the daily
+**`checkDailySyncRan`** runs at 11am, asks the GitHub API whether the daily
 sync succeeded today, and emails **Production Digest DID NOT RUN** if it did
-not. The email says to run `./run_daily.sh` by hand.
+not. It lives in Apps Script rather than GitHub for the obvious reason: a
+check that runs on the scheduler you are checking is no check at all.
 
 **A dead-man's switch.** The daily job pings an outside service on success; if
 that ping stops arriving, the service emails you. This is the only thing that
