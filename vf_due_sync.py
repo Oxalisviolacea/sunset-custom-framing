@@ -254,6 +254,38 @@ def fetch_rows(token, company_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD):
     return rows
 
 
+def audit_all_orders(token, company_id):
+    """Second pass with no date window, purely to catch broken records.
+
+    An order with no pickDate cannot come back from a date-filtered query --
+    there is no date to filter on -- so the main fetch is structurally blind to
+    exactly the orders most worth knowing about. This sweep sees everything.
+
+    Returns blocking flags only. It never produces calendar events.
+    """
+    params = {
+        "isPin": "1",
+        "excludeIsDelivered": EXCLUDE_DELIVERED,
+        "searchValue": "",
+        "sortsType": "3",
+        "projectCompanyId": company_id,
+        "limit": "500",
+        "page": "1",
+        "token": token,
+        "companyId": company_id,
+        "deviceOs": "backend",
+        "language": "3",
+    }
+    try:
+        body = requests.get(VF_ENDPOINT, params=params, timeout=60).json()
+    except (requests.RequestException, ValueError) as exc:
+        return [{"severity": "blocking", "reason": f"anomaly sweep failed: {exc}",
+                 "client": None, "artworkCode": None, "project": None}]
+
+    _, flags = to_jobs(body.get("data") or [])
+    return [f for f in flags if f.get("severity") == "blocking"]
+
+
 def to_jobs(rows):
     """Map API rows to calendar jobs.
 
@@ -263,8 +295,11 @@ def to_jobs(rows):
     """
     jobs, flags = [], []
 
-    def flag(reason, row, code=""):
+    def flag(reason, row, code="", severity="blocking"):
+        # blocking -> no event exists for this order at all.
+        # warning  -> the event is created but a field we display is missing.
         flags.append({
+            "severity": severity,
             "reason": reason,
             "artworkCode": code or None,
             "project": row.get("projectName"),
@@ -290,6 +325,12 @@ def to_jobs(rows):
         if not client:
             flag("missing client name", row, code)
             client = "(no client)"
+        elif client != " ".join(client.split()):
+            flag("client name has irregular whitespace", row, code, severity="warning")
+
+        artwork = (row.get("artworkName") or "").strip()
+        if not artwork:
+            flag("missing artwork name", row, code, severity="warning")
 
         # pickDate is UTC at local midnight: "2026-10-10 04:00:00" is Oct 10 EDT.
         try:
@@ -302,7 +343,7 @@ def to_jobs(rows):
         jobs.append({
             "job_code": code,
             "client": client,
-            "artwork": (row.get("artworkName") or "").strip(),
+            "artwork": artwork,
             "pickup_date": pickup_date,
             "title": f"PICKUP — {client} — {code}",
         })
@@ -310,7 +351,8 @@ def to_jobs(rows):
     seen = {}
     for job in jobs:
         if job["job_code"] in seen:
-            flags.append({"reason": "duplicate artwork code in feed",
+            flags.append({"severity": "blocking",
+                          "reason": "duplicate artwork code in feed",
                           "artworkCode": job["job_code"], "client": job["client"],
                           "project": None, "artwork": job["artwork"],
                           "pickDate": str(job["pickup_date"]), "projectId": None})
@@ -593,14 +635,30 @@ def main():
 
         rows = fetch_rows(token, company_id, args.days_back, args.days_ahead)
         jobs, flags = to_jobs(rows)
+        # Orders with no pickup date are invisible to the windowed fetch above,
+        # so sweep everything separately and merge in anything broken.
+        seen = {(f.get("artworkCode"), f.get("reason")) for f in flags}
+        for extra in audit_all_orders(token, company_id):
+            if (extra.get("artworkCode"), extra.get("reason")) not in seen:
+                extra["outside_window"] = True
+                flags.append(extra)
+
         report["rows_from_api"] = len(rows)
         report["jobs_usable"] = len(jobs)
         report["flags"] = flags
 
+        blocking = [f for f in flags if f.get("severity") == "blocking"]
+        warnings = [f for f in flags if f.get("severity") != "blocking"]
+        report["blocking_count"] = len(blocking)
+        report["warning_count"] = len(warnings)
+
         print(f"Rows from API: {len(rows)}   ->   usable jobs: {len(jobs)}")
-        for f in flags:
-            print(f"  FLAG {f['reason']}: project={f['project']!r} "
-                  f"client={f['client']!r} code={f['artworkCode']!r}")
+        for f in blocking:
+            print(f"  BLOCKING {f['reason']}: client={f['client']!r} "
+                  f"code={f['artworkCode']!r} project={f['project']!r}")
+        for f in warnings:
+            print(f"  warning  {f['reason']}: client={f['client']!r} "
+                  f"code={f['artworkCode']!r}")
 
         if len(jobs) < MIN_EXPECTED_JOBS:
             raise SyncError(f"only {len(jobs)} usable job(s) from {len(rows)} rows; "
@@ -618,7 +676,8 @@ def main():
             folded.setdefault(canon(job["job_code"]), []).append(job["job_code"])
         for codes in folded.values():
             if len(codes) > 1:
-                report["flags"].append({"reason": "codes indistinguishable after folding",
+                report["flags"].append({"severity": "blocking",
+                                        "reason": "codes indistinguishable after folding",
                                         "artworkCode": ", ".join(codes)})
                 print(f"WARNING: codes {codes} are indistinguishable after folding.")
 
