@@ -445,7 +445,10 @@ def gcal_service(allow_interactive=False):
 def event_day(event):
     start = event.get("start", {})
     if "dateTime" in start:
-        return datetime.fromisoformat(start["dateTime"]).astimezone(TZ).date()
+        # Python 3.9's fromisoformat rejects a trailing Z, and the system
+        # interpreter on macOS is still 3.9.
+        stamp = start["dateTime"].replace("Z", "+00:00")
+        return datetime.fromisoformat(stamp).astimezone(TZ).date()
     if "date" in start:
         return date.fromisoformat(start["date"])
     return None

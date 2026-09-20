@@ -8,11 +8,18 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-# Local runs use the venv; CI installs into the system interpreter.
+# Local runs use the venv; CI installs into the system interpreter. A stock
+# macOS has python3 but no `python`, so check for both.
 if [ -x ./.venv/bin/python ]; then
   PY=./.venv/bin/python
-else
+elif command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
   PY=python
+else
+  echo "No Python found. Install it, or build the venv:" >&2
+  echo "  python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt" >&2
+  exit 1
 fi
 
 "$PY" vf_due_sync.py --live
