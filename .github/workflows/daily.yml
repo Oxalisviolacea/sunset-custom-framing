@@ -12,6 +12,10 @@ on:
     # runs there are routinely delayed and sometimes dropped.
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
+    # TEMPORARY test slots -- remove after today
+    - cron: "45 14 * * *"
+    - cron: "50 14 * * *"
+    - cron: "55 14 * * *"
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 jobs:
@@ -37,6 +41,9 @@ jobs:
           elif [ "$sched" = "7 14 * * *" ] && [ "$offset" = "-0400" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "EDT slot, proceeding (local time ${local_time}, offset ${offset})."
+          elif [ "$sched" = "45 14 * * *" ] || [ "$sched" = "50 14 * * *" ] || [ "$sched" = "55 14 * * *" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "TEMPORARY test slot '${sched}', proceeding (local ${local_time})."
           elif [ "$sched" = "7 15 * * *" ] && [ "$offset" = "-0500" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "EST slot, proceeding (local time ${local_time}, offset ${offset})."
@@ -74,6 +81,21 @@ jobs:
           VF_PASSWORD: ${{ secrets.VF_PASSWORD }}
           VF_CALENDAR_ID: ${{ secrets.VF_CALENDAR_ID }}
         run: ./run_daily.sh
+
+      # Tells an outside service the run happened. If that ping stops arriving,
+      # the service emails you -- which is the only way to learn that GitHub
+      # never ran the job at all, since nothing here would be running to notice.
+      # Optional: skipped entirely when the secret is not set.
+      - name: Ping the dead-man's switch
+        if: steps.gate.outputs.run == 'true' && success()
+        env:
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          if [ -n "$HEALTHCHECK_URL" ]; then
+            curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" >/dev/null && echo "pinged"
+          else
+            echo "No HEALTHCHECK_URL secret set; skipping."
+          fi
 
       # Keeps the machine-readable result even when the run failed, which is
       # when you most want to look at it.

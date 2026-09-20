@@ -162,6 +162,23 @@ changed. Fix it there, then:
 
 and paste the new password when prompted.
 
+## What happens when it does not run at all
+
+The digest can only report a problem if the script ran. When GitHub drops the
+scheduled job — which it does occasionally — nothing runs, nothing is caught,
+and nothing is sent. Silence looks exactly like success. Two things cover that:
+
+**`watchdog.yml`** runs at 1pm Eastern, asks the GitHub API whether the daily
+sync succeeded today, and emails **Production Digest DID NOT RUN** if it did
+not. The email says to run `./run_daily.sh` by hand.
+
+**A dead-man's switch.** The daily job pings an outside service on success; if
+that ping stops arriving, the service emails you. This is the only thing that
+detects GitHub being wholly down, because nothing running inside GitHub would
+be alive to notice. Optional — set a `HEALTHCHECK_URL` secret (healthchecks.io
+has a free tier) and the ping step turns itself on. Without the secret the step
+skips silently.
+
 ## GitHub secrets
 
 The scheduled run reads five secrets. They are already set; this is only for
