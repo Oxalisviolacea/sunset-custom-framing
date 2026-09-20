@@ -7,8 +7,7 @@ on:
     # Fire at both candidate hours -- 14:00 UTC is 10am EDT, 15:00 UTC is 10am
     # EST -- and let the gate step below drop whichever one is the wrong hour
     # locally. Exactly one runs on any given day.
-    - cron: "0 14 * * *"
-    - cron: "0 15 * * *"
+    - cron: "25 3 * * *"   # TEMPORARY test fire — reverted right after
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 jobs:
@@ -21,7 +20,7 @@ jobs:
         id: gate
         run: |
           hour=$(TZ=America/New_York date +%H)
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$hour" = "10" ]; then
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$hour" = "23" ]; then   # TEMPORARY: 23 for the test
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Proceeding (local hour ${hour}, event ${{ github.event_name }})."
           else
