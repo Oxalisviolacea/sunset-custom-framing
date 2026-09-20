@@ -24,6 +24,55 @@ from googleapiclient.discovery import build
 import vf_due_sync as sync
 
 ALERT_TO = "DIGEST_TO_ADDRESS"
+
+# Shown whenever something looks like an expired or revoked credential, so the
+# person reading the alert at 7am does not have to find the runbook.
+AUTH_FIX_TEXT = """HOW TO FIX A GOOGLE SIGN-IN FAILURE
+
+On the shop computer, in Terminal:
+
+  cd ~/Documents/respositories/sunset-custom-framing
+  ./.venv/bin/python vf_due_sync.py --auth
+
+That prints a URL. Open it in a browser signed in to the
+your-workspace.example Google account and approve. It writes a new
+token.json.
+
+Then update the copy GitHub uses:
+
+  gh secret set GOOGLE_TOKEN_JSON < token.json
+
+HOW TO FIX A VIRTUAL FRAMER SIGN-IN FAILURE
+
+The password in .env is wrong or has changed. Fix it there, then:
+
+  gh secret set VF_PASSWORD
+
+and paste the new password when prompted."""
+
+AUTH_FIX_HTML = (
+    '<div style="background:#fff8e1; border-left:4px solid #b06000;'
+    ' padding:12px 16px; margin:16px 0; border-radius:4px;">'
+    '<p style="margin:0 0 8px; font-weight:600;">This looks like a sign-in '
+    'problem. To fix it:</p>'
+    '<p style="margin:0 0 6px;">On the shop computer, in Terminal:</p>'
+    '<pre style="margin:0 0 10px; background:#fff; padding:10px; '
+    'border-radius:3px; font-size:13px; overflow-x:auto;">'
+    'cd ~/Documents/respositories/sunset-custom-framing\n'
+    './.venv/bin/python vf_due_sync.py --auth</pre>'
+    '<p style="margin:0 0 6px;">Open the URL it prints in a browser signed in '
+    'to the your-workspace.example Google account and approve. Then update '
+    'the copy GitHub uses:</p>'
+    '<pre style="margin:0; background:#fff; padding:10px; border-radius:3px; '
+    'font-size:13px; overflow-x:auto;">gh secret set GOOGLE_TOKEN_JSON &lt; token.json</pre>'
+    '</div>')
+
+
+def looks_like_auth_trouble(text):
+    lowered = (text or "").lower()
+    return any(word in lowered for word in (
+        "credential", "token", "unauthorized", "invalid_grant", "expired",
+        "403", "401", "wrong password", "login", "scope", "auth"))
 FOLLOW_UP_PREFIX = "follow up"
 LOOKAHEAD_DAYS = 365
 LOOKBACK_DAYS = 365
@@ -99,6 +148,8 @@ def build_html(past_due, upcoming, follow_ups, errors, attention, now):
         for e in errors:
             h.append(f"<li>{e}</li>")
         h.append("</ul>")
+        if any(looks_like_auth_trouble(e) for e in errors):
+            h.append(AUTH_FIX_HTML)
 
     if attention:
         h.append('<h3 style="color:#b06000;">NEEDS ATTENTION:</h3>')
@@ -212,11 +263,13 @@ def main():
         # Fallback: a plain-text alert with no HTML, no calendar read, no API
         # call. Deliberately the simplest possible send.
         try:
-            send_mail(gmail(), ALERT_TO,
-                      "Production Digest FAILED",
-                      text=("The production digest could not be built or sent.\n\n"
-                            f"{message}\n\nPickup events may still be correct; "
-                            "this is the digest email only."))
+            body = ("The production digest could not be built or sent.\n\n"
+                    f"{message}\n\n"
+                    "Pickup events may still be correct; this is the digest "
+                    "email only.\n")
+            if looks_like_auth_trouble(message):
+                body += "\n" + AUTH_FIX_TEXT + "\n"
+            send_mail(gmail(), ALERT_TO, "Production Digest FAILED", text=body)
             print(f"Fallback alert sent to {ALERT_TO}")
         except Exception as inner:
             print(f"Fallback alert ALSO failed: {type(inner).__name__}: {inner}")

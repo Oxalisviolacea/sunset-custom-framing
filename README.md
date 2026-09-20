@@ -133,6 +133,61 @@ The sync exits non-zero and refuses to write rather than reporting success on
 an empty result. If a scheduled run fails, GitHub emails you and the report is
 attached to the run as an artifact.
 
+## When sign-in breaks
+
+The Virtual Framer token renews itself from `.env` and never needs you. The
+Google token is long-lived but not permanent — it stops working if someone
+revokes the app's access, if the Workspace admin changes its configuration, or
+if it goes unused for six months. Running daily means the six-month rule never
+fires.
+
+You will know because the run fails, GitHub emails you, and the digest reports
+it under **ERRORS** with these steps included in the email.
+
+**Google sign-in failed** — on the shop computer:
+
+    cd ~/Documents/respositories/sunset-custom-framing
+    ./.venv/bin/python vf_due_sync.py --auth
+
+Open the URL it prints in a browser signed in to the `your-workspace.example`
+Google account and approve. That writes a new `token.json`. Then update the
+copy GitHub uses:
+
+    gh secret set GOOGLE_TOKEN_JSON < token.json
+
+**Virtual Framer sign-in failed** — the password in `.env` is wrong or has
+changed. Fix it there, then:
+
+    gh secret set VF_PASSWORD
+
+and paste the new password when prompted.
+
+## GitHub secrets
+
+The scheduled run reads five secrets. They are already set; this is only for
+reference or a rebuild.
+
+| Secret | Where it comes from |
+|---|---|
+| `VF_USERNAME` | `.env` |
+| `VF_PASSWORD` | `.env` |
+| `VF_CALENDAR_ID` | the `work production` calendar |
+| `GOOGLE_CREDENTIALS_JSON` | the whole `credentials.json` file |
+| `GOOGLE_TOKEN_JSON` | the whole `token.json` file |
+
+To set them all again from the project folder:
+
+    set -a && . ./.env && set +a
+    printf '%s' "$VF_USERNAME" | gh secret set VF_USERNAME
+    printf '%s' "$VF_PASSWORD" | gh secret set VF_PASSWORD
+    gh secret set GOOGLE_CREDENTIALS_JSON < credentials.json
+    gh secret set GOOGLE_TOKEN_JSON      < token.json
+
+Run the workflow by hand any time:
+
+    gh workflow run daily.yml
+    gh run watch
+
 ## Marking something done
 
 Renaming a calendar event to include *done*, *paid*, *picked up* or *complete*
