@@ -7,9 +7,12 @@ Pushes Virtual Framer pickup dates into Google Calendar as
 
 | File | What it is |
 |---|---|
-| `vf_due_sync.py` | The sync. Calls Virtual Framer's JSON API. **Use this one.** |
-| `vf_due_sync_pdf_backup.py` | The old OCR version. Broken — kept for reference only. |
-| `summary_ongoing_clients_orders_*.pdf` | Sample report the old script parsed. |
+| `vf_due_sync.py` | Puts missing pickups on the calendar. Insert-only. |
+| `send_digest.py` | Emails the production digest. |
+| `run_daily.sh` | Runs both, in order. The cron entry point. |
+
+The original OCR script and the one-off code-repair script were deleted once
+their work was done; both are in git history if you ever need them.
 
 ## Why the old one broke
 

@@ -544,17 +544,6 @@ def find_match(job, index, claimed, jobs_per_client_day):
     return None, None
 
 
-def service_patch(service, event_id, body):
-    """Patch an existing event. Used only by fix_legacy_codes.py.
-
-    The sync itself never calls this -- it is insert-only by design. Repairing
-    a mislabelled code is a deliberate, separate, opt-in operation.
-    """
-    return service.events().patch(
-        calendarId=CALENDAR_ID, eventId=event_id, body=body
-    ).execute()
-
-
 def build_body(job):
     start = datetime.combine(job["pickup_date"], datetime.min.time()).replace(
         tzinfo=TZ, hour=EVENT_TIME_HOUR
