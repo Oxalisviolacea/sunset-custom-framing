@@ -72,14 +72,33 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
 ]
 TZ = ZoneInfo("America/New_York")
-# "or" rather than a get() default: an env var that is set but empty -- which
-# is what an unfilled line in .env or an empty GitHub secret produces -- must
-# fall back too. get() only falls back when the key is absent entirely, which
-# silently yields "" and a request to /calendars//events.
-CALENDAR_ID = os.environ.get("VF_CALENDAR_ID") or (
-    "YOUR_CALENDAR_ID"
-    "@group.calendar.google.com"
-)
+# Comes from the environment or .env, never hardcoded -- this repository is
+# public. An env var that is set but empty (an unfilled line in .env, an empty
+# secret) counts as missing, which os.environ.get(key, default) would not
+# catch: it only falls back when the key is absent, otherwise yielding "" and
+# a request to /calendars//events.
+def _load_dotenv():
+    """Fold .env into the environment, without overriding what is already set.
+
+    Has to run before any constant below reads os.environ -- otherwise a value
+    that lives only in .env is invisible to them.
+    """
+    path = HERE / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if value and not os.environ.get(key):
+            os.environ[key] = value
+
+
+_load_dotenv()
+
+CALENDAR_ID = os.environ.get("VF_CALENDAR_ID") or ""
 EVENT_TIME_HOUR = 9
 EVENT_DURATION_MIN = 30
 
@@ -530,7 +549,7 @@ def find_match(job, index, claimed, jobs_per_client_day):
             return event, "legacy code"
 
     # Same client, same day, code off by a single character. Tesseract made
-    # errors outside the fold map too -- it read ABC12 as ABC1Z -- and without
+    # errors outside the fold map too, U misread as J for instance, and without
     # this the sync would insert a second event beside the damaged one.
     # Deliberately narrow: same day AND same client AND one character.
     for event in same_day:
@@ -635,6 +654,9 @@ def main():
     }
 
     try:
+        if not CALENDAR_ID:
+            raise SyncError("VF_CALENDAR_ID is not set. Put the calendar id in "
+                            ".env (see .env.example) or in the environment.")
         token, company_id = get_vf_credentials()
         report["companyId"] = company_id
 
