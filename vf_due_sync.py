@@ -72,9 +72,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
 ]
 TZ = ZoneInfo("America/New_York")
-CALENDAR_ID = os.environ.get(
-    "VF_CALENDAR_ID",
-    "YOUR_CALENDAR_ID@group.calendar.google.com",
+# "or" rather than a get() default: an env var that is set but empty -- which
+# is what an unfilled line in .env or an empty GitHub secret produces -- must
+# fall back too. get() only falls back when the key is absent entirely, which
+# silently yields "" and a request to /calendars//events.
+CALENDAR_ID = os.environ.get("VF_CALENDAR_ID") or (
+    "YOUR_CALENDAR_ID"
+    "@group.calendar.google.com"
 )
 EVENT_TIME_HOUR = 9
 EVENT_DURATION_MIN = 30
