@@ -79,7 +79,7 @@ the daily email will start failing.
 
 ## About token.json
 
-It is signed in as DIGEST_TO_ADDRESS. Anything the scripts do —
+It is signed in as the shop address in DIGEST_TO. Anything the scripts do —
 calendar events, the digest email — happens as that account, not as you.
 
 To use your own Google account instead, delete `token.json` and run:
@@ -87,7 +87,7 @@ To use your own Google account instead, delete `token.json` and run:
     ./.venv/bin/python vf_due_sync.py --auth
 
 It prints a URL. Open it in a browser signed in to your
-your-workspace.example account and approve. You must be in that Workspace.
+your Google Workspace account and approve. You must be in that Workspace.
 
 ## Worth knowing
 

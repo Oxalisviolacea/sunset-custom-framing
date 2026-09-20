@@ -27,8 +27,8 @@
  *    Copy it. GitHub shows it once.
  *
  * 2. Project Settings -> Script Properties -> Add script property
- *      Property : GITHUB_TOKEN
- *      Value    : the token
+ *      Property : GITHUB_TOKEN   Value: the token
+ *      Property : DIGEST_TO      Value: where alerts should go
  *
  * 3. Triggers (clock icon) -> Add Trigger, twice:
  *      fireDailySync      | Time-driven | Day timer | 10am to 11am
@@ -44,7 +44,9 @@
 const GITHUB_OWNER = 'Oxalisviolacea';
 const GITHUB_REPO = 'sunset-custom-framing';
 const WORKFLOW_FILE = 'daily.yml';
-const ALERT_TO = 'DIGEST_TO_ADDRESS';
+// Set as a script property, not written here: this repository is public and
+// this address doubles as the Virtual Framer username.
+const ALERT_TO = PropertiesService.getScriptProperties().getProperty('DIGEST_TO');
 
 const RUN_BY_HAND =
   'To run it by hand on the shop computer:\n\n' +

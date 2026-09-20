@@ -68,6 +68,7 @@ jobs:
           VF_USERNAME: ${{ secrets.VF_USERNAME }}
           VF_PASSWORD: ${{ secrets.VF_PASSWORD }}
           VF_CALENDAR_ID: ${{ secrets.VF_CALENDAR_ID }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
         run: ./run_daily.sh
 
       # Tells an outside service the run happened. If that ping stops arriving,

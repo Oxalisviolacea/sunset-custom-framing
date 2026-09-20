@@ -15,6 +15,7 @@ tends to survive whatever broke the first one.
 
 import base64
 import datetime
+import os
 import json
 import sys
 from email.mime.text import MIMEText
@@ -23,7 +24,9 @@ from googleapiclient.discovery import build
 
 import vf_due_sync as sync
 
-ALERT_TO = "DIGEST_TO_ADDRESS"
+# Not hardcoded: this repository is public, and this address doubles as the
+# Virtual Framer username. Set DIGEST_TO in .env or the environment.
+ALERT_TO = os.environ.get("DIGEST_TO") or ""
 
 # Shown whenever something looks like an expired or revoked credential, so the
 # person reading the alert at 7am does not have to find the runbook.
@@ -35,7 +38,7 @@ On the shop computer, in Terminal:
   ./.venv/bin/python vf_due_sync.py --auth
 
 That prints a URL. Open it in a browser signed in to the
-your-workspace.example Google account and approve. It writes a new
+your Google Workspace Google account and approve. It writes a new
 token.json.
 
 Then update the copy GitHub uses:
@@ -61,7 +64,7 @@ AUTH_FIX_HTML = (
     'cd ~/Documents/respositories/sunset-custom-framing\n'
     './.venv/bin/python vf_due_sync.py --auth</pre>'
     '<p style="margin:0 0 6px;">Open the URL it prints in a browser signed in '
-    'to the your-workspace.example Google account and approve. Then update '
+    'to the your Google Workspace Google account and approve. Then update '
     'the copy GitHub uses:</p>'
     '<pre style="margin:0; background:#fff; padding:10px; border-radius:3px; '
     'font-size:13px; overflow-x:auto;">gh secret set GOOGLE_TOKEN_JSON &lt; token.json</pre>'
@@ -202,6 +205,9 @@ def gather_from_report():
 
 def main():
     dry_run = "--send" not in sys.argv
+    if not ALERT_TO:
+        sys.exit("ERROR: DIGEST_TO is not set. Put the recipient in .env "
+                 "(see .env.example).")
     cal = None
     try:
         token, company_id = sync.get_vf_credentials()

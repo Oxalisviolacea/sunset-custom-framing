@@ -54,7 +54,7 @@ be sent.
 
     ./.venv/bin/python send_digest.py --send
 
-Goes to DIGEST_TO_ADDRESS.
+Goes to the shop address in DIGEST_TO.
 
 ### Do both, the way the cron does
 
@@ -101,7 +101,7 @@ Put `credentials.json` (the Google OAuth client) in this folder, then:
     ./.venv/bin/python vf_due_sync.py --auth
 
 That prints a URL. Open it in a browser signed into the
-`your-workspace.example` Google account, approve, and it writes `token.json`.
+`your Google Workspace` Google account, approve, and it writes `token.json`.
 You only do this once.
 
 None of `.env`, `credentials.json`, `token.json` or `.vf_token.json` are in git.
@@ -149,7 +149,7 @@ it under **ERRORS** with these steps included in the email.
     cd ~/Documents/respositories/sunset-custom-framing
     ./.venv/bin/python vf_due_sync.py --auth
 
-Open the URL it prints in a browser signed in to the `your-workspace.example`
+Open the URL it prints in a browser signed in to the `your Google Workspace`
 Google account and approve. That writes a new `token.json`. Then update the
 copy GitHub uses:
 
