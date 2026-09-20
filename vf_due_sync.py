@@ -394,7 +394,12 @@ def title_looks_done(title, client=""):
     return bool(DONE_RE.search(probe))
 
 
-def gcal_service(allow_interactive=False):
+def google_credentials(allow_interactive=False):
+    """The shared OAuth credentials. Calendar and Gmail both use these."""
+    return _load_credentials(allow_interactive)
+
+
+def _load_credentials(allow_interactive=False):
     creds = None
     token_path = HERE / "token.json"
 
@@ -426,7 +431,11 @@ def gcal_service(allow_interactive=False):
         token_path.write_text(creds.to_json())
         token_path.chmod(0o600)
 
-    return build("calendar", "v3", credentials=creds)
+    return creds
+
+
+def gcal_service(allow_interactive=False):
+    return build("calendar", "v3", credentials=_load_credentials(allow_interactive))
 
 
 def event_day(event):
