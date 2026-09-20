@@ -2,6 +2,12 @@ name: Daily pickup sync and digest
 
 on:
   schedule:
+    # Kept as a backup only. GitHub's scheduler has never fired for this
+    # repository -- six slots across two days, private and public, zero runs,
+    # while every dispatch succeeded. The real schedule is Apps Script, in
+    # trigger/AppsScriptTrigger.gs. If GitHub ever starts working, the dedupe
+    # step below stops the two of them sending twice.
+    #
     # 10:00 America/New_York year-round. GitHub cron is UTC only, so both
     # candidate hours fire -- 14:23 UTC is 10am EDT, 15:23 UTC is 10am EST --
     # and the gate below drops whichever is wrong for the current offset.
@@ -9,9 +15,6 @@ on:
     # minute on the platform.
     - cron: "23 14 * * *"
     - cron: "23 15 * * *"
-    # TEMPORARY: proves the scheduler works now the repo is public. Remove.
-    - cron: "5 17 * * *"
-    - cron: "12 17 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,8 +39,6 @@ jobs:
           local_time=$(TZ=America/New_York date '+%H:%M')
           if [ "${{ github.event_name }}" != "schedule" ]; then
             ok=true
-          elif [ "$sched" = "5 17 * * *" ] || [ "$sched" = "12 17 * * *" ]; then
-            ok=true                                   # TEMPORARY test slots
           elif [ "$sched" = "23 14 * * *" ] && [ "$offset" = "-0400" ]; then
             ok=true
           elif [ "$sched" = "23 15 * * *" ] && [ "$offset" = "-0500" ]; then
