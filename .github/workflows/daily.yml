@@ -2,13 +2,16 @@ name: Daily pickup sync and digest
 
 on:
   schedule:
-    # Target is 10:00 America/New_York year-round. GitHub cron is UTC only and
-    # has no timezone support, so a single hour would drift to 11am across DST.
-    # Fire at both candidate hours -- 14:00 UTC is 10am EDT, 15:00 UTC is 10am
-    # EST -- and let the gate step below drop whichever one is the wrong hour
-    # locally. Exactly one runs on any given day.
-    - cron: "0 14 * * *"
-    - cron: "0 15 * * *"
+    # Target is 10:00 America/New_York year-round. GitHub cron is UTC only, so
+    # fire at both candidate hours -- 14:00 UTC is 10am EDT, 15:00 UTC is 10am
+    # EST -- and let the gate below drop the one that is wrong for the current
+    # offset. Exactly one runs per day.
+    #
+    # :07 rather than :00 on purpose. GitHub queues scheduled jobs best-effort
+    # and the top of the hour is the most contended minute on the platform;
+    # runs there are routinely delayed and sometimes dropped.
+    - cron: "7 14 * * *"
+    - cron: "7 15 * * *"
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 jobs:
@@ -20,13 +23,26 @@ jobs:
       - name: Only proceed at 10am Eastern
         id: gate
         run: |
-          hour=$(TZ=America/New_York date +%H)
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$hour" = "10" ]; then
+          # Decide on the UTC offset, not the local hour. GitHub frequently runs
+          # scheduled jobs late; an hour-equality check would reject a delayed
+          # run AND its DST twin, so a late trigger would mean no run that day.
+          # The offset does not change with the delay, so this still fires.
+          offset=$(TZ=America/New_York date +%z)   # -0400 in EDT, -0500 in EST
+          sched="${{ github.event.schedule }}"
+          local_time=$(TZ=America/New_York date '+%H:%M')
+
+          if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Proceeding (local hour ${hour}, event ${{ github.event_name }})."
+            echo "Manual run, proceeding (local time ${local_time})."
+          elif [ "$sched" = "7 14 * * *" ] && [ "$offset" = "-0400" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "EDT slot, proceeding (local time ${local_time}, offset ${offset})."
+          elif [ "$sched" = "7 15 * * *" ] && [ "$offset" = "-0500" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "EST slot, proceeding (local time ${local_time}, offset ${offset})."
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Local hour is ${hour}, not 10. This is the DST twin; skipping."
+            echo "Schedule '${sched}' is the wrong slot for offset ${offset}; skipping."
           fi
 
       - uses: actions/checkout@v4
