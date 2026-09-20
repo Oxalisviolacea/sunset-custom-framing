@@ -1,7 +1,81 @@
-# Sunset Custom Framing — pickup date sync
+# Sunset Custom Framing — pickup sync and production digest
 
-Pushes Virtual Framer pickup dates into Google Calendar as
-`PICKUP — {client} — {artwork code}` events at 9:00am America/New_York.
+Puts Virtual Framer pickup dates on the **work production** Google Calendar as
+`PICKUP — {client} — {artwork code}` events at 9:00am Eastern, then emails a
+daily production digest.
+
+Runs automatically every morning via GitHub Actions. Everything below is for
+running it **by hand**, which is safe to do any time — the sync is idempotent,
+so an extra run adds nothing.
+
+---
+
+## Running it by hand
+
+All commands assume you are in the project folder:
+
+    cd ~/Documents/respositories/sunset-custom-framing
+
+Local runs use `./.venv/bin/python`. If the venv is missing, rebuild it:
+
+    python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+
+### See what the sync would do — changes nothing
+
+    ./.venv/bin/python vf_due_sync.py
+
+**This is the default and it is a dry run.** It prints one line per order:
+`exists` means the order already has an event and will be left alone,
+`would_insert` means it would create one. Nothing is written.
+
+### Actually add the missing events
+
+    ./.venv/bin/python vf_due_sync.py --live
+
+Only `--live` writes. It **only ever inserts**. It never edits, moves or
+deletes an existing event, so anything your team has changed by hand — a
+`DONE - ` prefix, a note, a moved time — is safe.
+
+### Look further back or further ahead
+
+    ./.venv/bin/python vf_due_sync.py --days-back 180 --days-ahead 365
+
+Defaults are 90 days back, 180 forward. Use this to check on older orders
+without changing what the daily run does.
+
+### Preview the digest email — sends nothing
+
+    ./.venv/bin/python send_digest.py
+
+Writes `digest_preview.html`. Open it in a browser to see exactly what would
+be sent.
+
+### Send the digest now
+
+    ./.venv/bin/python send_digest.py --send
+
+Goes to DIGEST_TO_ADDRESS.
+
+### Do both, the way the cron does
+
+    ./run_daily.sh
+
+Sync first, then digest. **This one writes** — it is the scheduled job, not a
+preview.
+
+---
+
+## Quick reference
+
+| Command | Writes to calendar? | Sends email? |
+|---|---|---|
+| `vf_due_sync.py` | no | no |
+| `vf_due_sync.py --live` | yes, inserts only | no |
+| `send_digest.py` | no | no |
+| `send_digest.py --send` | no | yes |
+| `run_daily.sh` | yes | yes |
+
+---
 
 ## Files
 
@@ -10,79 +84,61 @@ Pushes Virtual Framer pickup dates into Google Calendar as
 | `vf_due_sync.py` | Puts missing pickups on the calendar. Insert-only. |
 | `send_digest.py` | Emails the production digest. |
 | `run_daily.sh` | Runs both, in order. The cron entry point. |
+| `.github/workflows/daily.yml` | The daily schedule. |
 
 The original OCR script and the one-off code-repair script were deleted once
-their work was done; both are in git history if you ever need them.
+their work was done. Both are in git history if you ever need them.
 
-## Why the old one broke
+---
 
-It rendered a jsPDF report to images, OCR'd them with Tesseract, and matched
-labels with regexes. Virtual Framer relabelled the report — `Project name:` to
-`Project:`, `Client name:` to `Client:`, and the artwork code moved off the
-`Artwork:` line — so three of its four regexes stopped matching. It parsed zero
-records and still printed `Sync complete.`
+## Setup on a new machine
 
-`vf_due_sync.py` calls the endpoint the web app calls for itself, so the data
-arrives as typed JSON. No OCR, no character-confusion between `0`/`O`.
+    python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+    cp .env.example .env        # then fill in VF_USERNAME and VF_PASSWORD
 
-## Setup
+Put `credentials.json` (the Google OAuth client) in this folder, then:
 
-    pip install -r requirements.txt
-    playwright install chromium
+    ./.venv/bin/python vf_due_sync.py --auth
 
-Put your Google OAuth client secrets in `credentials.json` (same file the old
-script used). First run opens a browser for Google consent and writes `token.json`.
+That prints a URL. Open it in a browser signed into the
+`your-workspace.example` Google account, approve, and it writes `token.json`.
+You only do this once.
 
-## Use
+None of `.env`, `credentials.json`, `token.json` or `.vf_token.json` are in git.
 
-    python vf_due_sync.py              # dry run — prints what it WOULD do
-    python vf_due_sync.py --live       # actually writes to the calendar
+---
 
-Dry run is the default on purpose. Check the counts look right before `--live`.
+## How it decides an order already has an event
 
-Window defaults to 30 days back / 180 days ahead:
+Every event it creates carries a hidden `vfJobCode` property holding the
+artwork code. It is invisible in Google Calendar and survives renaming, so you
+can retitle an event to anything and the sync still recognises it.
 
-    python vf_due_sync.py --days-back 7 --days-ahead 90
+If that lookup fails it falls back to same-day matching that tolerates the
+character confusions the old OCR script used to make (`O`/`0`, `I`/`1`,
+`S`/`5`), and then to same-day-plus-client when a code is off by one
+character. A matched event is claimed and cannot be matched again, so a client
+with several artworks on one day gets one event per artwork.
 
-## Logging in
+## When something is wrong
 
-The script keeps its own browser profile in `.vf_browser_profile/`. The first
-run opens a window so you can log into Virtual Framer by hand. The session
-token lasts ~30 days, so after that it runs unattended until the token expires,
-then prompts again.
+Every run writes `last_run_report.json`, and the digest email surfaces it:
 
-Your password is never read, stored, or transmitted by this script — the
-browser handles it and the script only reads the resulting token.
+- **ERRORS** — the software failed. A rejected login, a dead network, a
+  truncated response. The calendar may be out of date.
+- **NEEDS ATTENTION** — a record needs fixing in Virtual Framer, usually an
+  order with no pickup date. The software is fine; the data is not.
 
-## If it breaks again
+The sync exits non-zero and refuses to write rather than reporting success on
+an empty result. If a scheduled run fails, GitHub emails you and the report is
+attached to the run as an artifact.
 
-It exits non-zero and refuses to sync when the feed returns fewer rows than
-expected, rather than reporting success on an empty parse. Check:
+## Marking something done
 
-1. Is the token expired? The script prints days remaining on every run.
-2. Did `randomReference` (the artwork code) stop being populated? Dropping the
-   `excludeIsDelivered` filter makes the API return project-level rows with
-   null codes — if the filter semantics change, that is the first thing to check.
+Renaming a calendar event to include *done*, *paid*, *picked up* or *complete*
+stops it being modified — though the sync never modifies events anyway. It does
+**not** remove the pickup from the digest. That takes marking the order
+delivered in Virtual Framer. Two confirmations.
 
-## Duplicate prevention
-
-Before writing anything, the script loads every existing event in the date
-window and matches each order against it, in order of confidence:
-
-1. **Exact code** — the `vfJobCode` property, anywhere in the window. Catches an
-   order whose pickup date moved, and moves the event with it.
-2. **Same day, OCR-folded code** — `O/0`, `I/L/1`, `S/5`, `B/8`, `Z/2`, `G/6` are
-   folded together, so an event the old script wrote as `Q30B8` is recognised as
-   `YZA78` and updated rather than duplicated. The correct code is stamped on
-   write, so each event self-heals the first time it is touched.
-3. **Same day, client name** — only when that client has exactly one pickup that
-   day *and* exactly one candidate event matches.
-
-An event matched by one order is claimed and cannot be matched by another, so
-three artworks for the same client on the same day map to three distinct events
-instead of collapsing onto one.
-
-Anything not matched by those three rules is genuinely new, and gets inserted.
-
-All 15 codes from the sample PDF remain distinct after OCR folding, so the
-normalisation cannot merge two real orders.
+Follow-ups are the exception: they exist only on the calendar, so a done mark
+in the title is the only signal there is and it does drop them from the digest.
