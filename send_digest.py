@@ -82,8 +82,10 @@ def looks_like_auth_trouble(text):
         "credential", "token", "unauthorized", "invalid_grant", "expired",
         "403", "401", "wrong password", "login", "scope", "auth"))
 FOLLOW_UP_PREFIX = "follow up"
-LOOKAHEAD_DAYS = 365
-LOOKBACK_DAYS = 365
+# Same window the sync uses. An order the sync would never put on the calendar
+# should not appear in the digest either.
+LOOKAHEAD_DAYS = sync.DAYS_AHEAD
+LOOKBACK_DAYS = sync.DAYS_BACK
 
 
 def fmt(d):
@@ -201,14 +203,23 @@ def collect_follow_ups(cal, today):
     return sorted(out, key=lambda f: f["date"])
 
 
-def table(rows, colour=None):
+def table(rows, colour=None, show_overdue=False):
     style = f' style="color:{colour}; font-weight:600;"' if colour else ""
-    html = ['<table style="border-collapse:collapse; width:100%;">',
-            '<tr><th style="text-align:left;padding-right:12px;">Due</th>'
-            '<th style="text-align:left;">Job</th></tr>']
+    head = ('<tr><th style="text-align:left;padding-right:12px;">Due</th>'
+            + ('<th style="text-align:left;padding-right:12px;">Overdue</th>'
+               if show_overdue else "")
+            + '<th style="text-align:left;">Job</th></tr>')
+    html = ['<table style="border-collapse:collapse; width:100%;">', head]
     for r in rows:
+        overdue = ""
+        if show_overdue:
+            days = r.get("days_over", 0)
+            label = "1 day" if days == 1 else f"{days} days"
+            overdue = (f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">'
+                       f'{label}</td>')
         html.append(f'<tr{style}>'
                     f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">{fmt(r["date"])}</td>'
+                    f'{overdue}'
                     f'<td style="padding:6px 0;">{r["title"]}</td></tr>')
     html.append("</table>")
     return "".join(html)
@@ -248,7 +259,8 @@ def build_html(past_due, upcoming, follow_ups, errors, attention, now):
         h.append("</ul>")
 
     h.append("<h3>PAST DUE:</h3>")
-    h.append(table(past_due, "#d93025") if past_due else "<p>None.</p>")
+    h.append(table(past_due, "#d93025", show_overdue=True)
+             if past_due else "<p>None.</p>")
 
     h.append('<h3 style="margin-top:20px;">UPCOMING:</h3>')
     h.append(table(upcoming) if upcoming else "<p>None.</p>")
@@ -323,8 +335,10 @@ def main():
                        if still_outstanding(r, find_event(r, by_code, by_day_client))]
         jobs, flags = sync.to_jobs(outstanding)
 
-        past_due = [{"date": j["pickup_date"], "title": j["title"]}
+        past_due = [{"date": j["pickup_date"], "title": j["title"],
+                     "days_over": (today - j["pickup_date"]).days}
                     for j in jobs if j["pickup_date"] < today]
+        past_due.sort(key=lambda r: r["days_over"], reverse=True)
         upcoming = [{"date": j["pickup_date"], "title": j["title"]}
                     for j in jobs if j["pickup_date"] >= today]
 
