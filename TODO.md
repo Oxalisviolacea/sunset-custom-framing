@@ -1,47 +1,36 @@
 # To do
 
-## 1. Tell "delivered" apart from "done" in Virtual Framer
+## 1. Remove the fuzzy code matching — after `repair_once.py` has run
 
-Virtual Framer records **delivered**, which is not the same as the work being
-**done**. A job can be finished in the workshop but not yet collected, and the
-digest cannot currently tell those apart — it only reads `isDelivered`.
+`vf_due_sync.py` and `send_digest.py` both match a calendar event to an order
+by exact code, then by folding characters the old OCR confused (`O`/`0`,
+`I`/`1`, `S`/`5`, `B`/`8`, `Z`/`2`, `G`/`6`), then by same-day-and-client.
 
-That probably wants its own section in the email, something like *finished,
-waiting for pickup*, separate from past due and upcoming.
+Those fallbacks exist only for events the old script wrote with a misread
+code. Nothing produces bad codes any more — the API gives exact values — so
+once the calendar is clean the fallbacks are dead weight, and they carry a
+real risk: matching the wrong event.
 
-Needs deciding first:
+Once `repair_once.py --apply` has run, delete from both files:
 
-- What each `isDelivered` value actually means. `1, 4, 6` are treated as
-  finished and `2, 3` as open, copied from the app's own "ongoing" filter.
-  Nobody has confirmed what the numbers mean.
-- Whether a state for "made but not collected" exists at all, or whether it
-  has to come from somewhere else in the record.
-- What to call the new section.
+- `CONFUSABLES`, `canon()`, `_edit_distance_1()`
+- the "legacy code" and "near-miss code" tiers in `find_match()`
+- the fold and day+client tiers in `find_event()`
 
-The digest is correct as it stands, just coarser than the real workflow.
+Leaving only the exact `vfJobCode` lookup.
 
-## 2. Repair mis-OCR'd codes on delivered orders
+## 2. One event that cannot be matched with confidence
 
-Nine calendar events store a code the old OCR script misread — `OF3KZ` where
-Virtual Framer says `0F3KZ`, and similar. Nothing is broken: the digest and
-the sync both fall back to fuzzy matching and find them. But they resolve by
-guesswork on every run instead of matching exactly, which is a thinner margin
-than it needs to be.
+`Michele Bayens`, pickup 2026-09-29. The calendar has `61CWR`; Virtual Framer
+says `RM6K2`. The two share no characters, so this is not an OCR misreading —
+it may be a different artwork entirely.
 
-`fix_legacy_codes.py` did exactly this repair and was deleted once the open
-orders were clean. It would need restoring and pointing at delivered orders.
+`repair_once.py` deliberately leaves it alone. Someone who knows the job
+should look at it. Until then the sync will treat `RM6K2` as having no event,
+which is harmless: the order is delivered and stays out of the digest.
 
-Low priority. Every one of these is a finished order.
+---
 
-## 3. One order has never been on the calendar
-
-`John Limitone 4NR4W`, project `QLA25`, pickup 2026-07-22 — a two-day glass
-replacement, no framing, $95.36. Placed and delivered inside a single week,
-which is likely why the old script never created an event for it. Nobody at
-the shop recognises the name.
-
-It is delivered and out of the digest. Listed only so it is not mistaken for
-a gap in the sync later.
-
-Orders older than 90 days with no calendar event are deliberately not being
-fixed.
+Closed: whether Virtual Framer's other delivery states need their own section
+in the email. They do not — delivered in Virtual Framer plus a done word on
+the calendar are the only two things that matter.
