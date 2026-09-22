@@ -265,10 +265,22 @@ Run the workflow by hand any time:
 
 ## Marking something done
 
-Renaming a calendar event to include *done*, *paid*, *picked up* or *complete*
-stops it being modified — though the sync never modifies events anyway. It does
-**not** remove the pickup from the digest. That takes marking the order
-delivered in Virtual Framer. Two confirmations.
+An order leaves the digest only when **both** have happened:
 
-Follow-ups are the exception: they exist only on the calendar, so a done mark
-in the title is the only signal there is and it does drop them from the digest.
+1. It is marked delivered in **Virtual Framer**, and
+2. Its calendar event title contains *done*, *paid*, *picked up* or *complete*
+
+Either one on its own leaves it listed. That is deliberate — it keeps nagging
+until both records agree, so nothing gets quietly lost because one system was
+updated and the other was not.
+
+The one exception: an order with **no calendar event at all**. There is
+nothing to mark, so Virtual Framer alone decides. Without that, every order
+predating the calendar sync would reappear forever — 182 of them today.
+
+Follow-ups work differently. They exist only on the calendar and have no
+Virtual Framer record to confirm against, so a done word in the title is the
+only signal there is, and it does drop them.
+
+None of this affects the **sync**, which never modifies an existing event
+whatever its title says. This is purely about what the digest lists.

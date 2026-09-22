@@ -22,7 +22,12 @@ from email.mime.text import MIMEText
 
 from googleapiclient.discovery import build
 
+import requests
+
 import vf_due_sync as sync
+
+# isDelivered values the Virtual Framer "ongoing" view treats as finished.
+VF_DONE_STATES = {1, 4, 6}
 
 # Not hardcoded: this repository is public, and this address doubles as the
 # Virtual Framer username. Set DIGEST_TO in .env or the environment.
@@ -95,6 +100,50 @@ def send_mail(service, to, subject, html=None, text=None):
     body["subject"] = subject
     raw = base64.urlsafe_b64encode(body.as_bytes()).decode()
     return service.users().messages().send(userId="me", body={"raw": raw}).execute()
+
+
+def fetch_every_order(token, company_id):
+    """Every order regardless of delivery state.
+
+    The sync only wants open orders, but the digest has to see finished ones
+    too: an order leaves the digest only when it is delivered in Virtual Framer
+    AND marked done on the calendar. Fetching only the open ones would make the
+    second half of that impossible to check.
+    """
+    params = {
+        "isPin": "1", "searchValue": "", "sortsType": "3",
+        "projectCompanyId": company_id, "limit": "500", "page": "1",
+        "token": token, "companyId": company_id,
+        "deviceOs": "backend", "language": "3",
+    }
+    try:
+        body = requests.get(sync.VF_ENDPOINT, params=params, timeout=60).json()
+    except (requests.RequestException, ValueError) as exc:
+        raise sync.SyncError(f"orders request failed: {exc}") from exc
+    if body.get("code") != 200:
+        raise sync.SyncError(f"API returned code={body.get('code')} "
+                             f"msg={body.get('msg')!r}")
+    return body.get("data") or []
+
+
+def still_outstanding(row, event):
+    """Should this order still appear in the digest?
+
+    Two confirmations are needed to take it off: delivered in Virtual Framer,
+    and marked done on the calendar. Either one alone leaves it listed -- that
+    is the point, it nags until both are recorded.
+
+    The exception is an order with no calendar event at all. There is nothing
+    to mark, so Virtual Framer alone decides. Without this, every order
+    predating the calendar sync would reappear forever.
+    """
+    vf_done = row.get("isDelivered") in VF_DONE_STATES
+    if not vf_done:
+        return True
+    if event is None:
+        return False
+    return not sync.title_looks_done(event.get("summary") or "",
+                                     (row.get("clientName") or "").strip())
 
 
 def collect_follow_ups(cal, today):
@@ -211,16 +260,32 @@ def main():
     cal = None
     try:
         token, company_id = sync.get_vf_credentials()
-        jobs, flags = sync.to_jobs(sync.fetch_rows(token, company_id,
-                                                   LOOKBACK_DAYS, LOOKAHEAD_DAYS))
         today = datetime.datetime.now(sync.TZ).date()
+
+        rows = fetch_every_order(token, company_id)
+        cal = sync.gcal_service()
+
+        # Index the calendar once so each order can be checked against it.
+        events = sync.load_existing_events(
+            cal,
+            today - datetime.timedelta(days=LOOKBACK_DAYS),
+            today + datetime.timedelta(days=LOOKAHEAD_DAYS))
+        by_code = {}
+        for event in events["all"]:
+            code = (event.get("extendedProperties", {}) or {}).get(
+                "private", {}).get("vfJobCode")
+            if code:
+                by_code[code] = event
+
+        outstanding = [r for r in rows
+                       if still_outstanding(r, by_code.get((r.get("vfReference") or "").strip()))]
+        jobs, flags = sync.to_jobs(outstanding)
 
         past_due = [{"date": j["pickup_date"], "title": j["title"]}
                     for j in jobs if j["pickup_date"] < today]
         upcoming = [{"date": j["pickup_date"], "title": j["title"]}
                     for j in jobs if j["pickup_date"] >= today]
 
-        cal = sync.gcal_service()
         follow_ups = collect_follow_ups(cal, today)
 
         errors, attention = gather_from_report()
