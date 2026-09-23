@@ -661,7 +661,8 @@ def main():
 
         claimed, tally = set(), {}
         for job in jobs:
-            clash = looks_ambiguous(job, index, claimed)
+            existing, _ = find_match(job, index, claimed, jobs_per_client_day)
+            clash = None if existing else looks_ambiguous(job, index, claimed)
             if clash is not None:
                 report["flags"].append({
                     "severity": "blocking",
