@@ -202,9 +202,13 @@ Apps Script day timers fire somewhere inside the hour you pick, in the script
 account's timezone, and handle daylight saving themselves. GitHub still does
 all the work — it is simply not asked to know what time it is.
 
-The `schedule:` block in `daily.yml` is kept only as a backup in case GitHub's
-scheduler ever starts working. If both ever fire, the dedupe step below means
-you still get one digest.
+`daily.yml` has no `schedule:` at all — it only runs when dispatched. GitHub's
+cron did eventually start firing once the repo was public, but around four
+hours late: a 14:23 slot ran at 18:08. Useless for a morning digest, and not
+worth a second scheduler to explain.
+
+The dedupe step stays. It no longer guards against two schedulers, but it
+still stops a retry or a manual dispatch producing a second digest.
 
 ### Rebuilding the Apps Script side
 
@@ -388,9 +392,13 @@ Apps Script day timers fire somewhere inside the hour you pick, in the script
 account's timezone, and handle daylight saving themselves. GitHub still does
 all the work — it is simply not asked to know what time it is.
 
-The `schedule:` block in `daily.yml` is kept only as a backup in case GitHub's
-scheduler ever starts working. If both ever fire, the dedupe step below means
-you still get one digest.
+`daily.yml` has no `schedule:` at all — it only runs when dispatched. GitHub's
+cron did eventually start firing once the repo was public, but around four
+hours late: a 14:23 slot ran at 18:08. Useless for a morning digest, and not
+worth a second scheduler to explain.
+
+The dedupe step stays. It no longer guards against two schedulers, but it
+still stops a retry or a manual dispatch producing a second digest.
 
 ### Rebuilding the Apps Script side
 
