@@ -267,16 +267,10 @@ def collect_follow_ups(cal, today):
 
 def table(rows, colour=None, show_overdue=False):
     style = f' style="color:{colour}; font-weight:600;"' if colour else ""
-    # A client often has several pieces due the same day, and the titles differ
-    # only by a five-character code. The artwork name is what tells them apart.
-    has_artwork = any(r.get("artwork") for r in rows)
     head = ('<tr><th style="text-align:left;padding-right:12px;">Due</th>'
             + ('<th style="text-align:left;padding-right:12px;">Overdue</th>'
                if show_overdue else "")
-            + '<th style="text-align:left;">Job</th>'
-            + ('<th style="text-align:left;padding-left:12px;">Artwork</th>'
-               if has_artwork else "")
-            + '</tr>')
+            + '<th style="text-align:left;">Job</th></tr>')
     html = ['<table style="border-collapse:collapse; width:100%;">', head]
     for r in rows:
         overdue = ""
@@ -285,13 +279,10 @@ def table(rows, colour=None, show_overdue=False):
             label = "1 day" if days == 1 else f"{days} days"
             overdue = (f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">'
                        f'{label}</td>')
-        artwork = (f'<td style="padding:6px 0 6px 12px; white-space:nowrap;">'
-                   f'{r.get("artwork") or ""}</td>') if has_artwork else ""
         html.append(f'<tr{style}>'
                     f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">{fmt(r["date"])}</td>'
                     f'{overdue}'
-                    f'<td style="padding:6px 0;">{r["title"]}</td>'
-                    f'{artwork}</tr>')
+                    f'<td style="padding:6px 0;">{r["title"]}</td></tr>')
     html.append("</table>")
     return "".join(html)
 
@@ -472,7 +463,6 @@ def main():
         jobs, flags = sync.to_jobs(outstanding)
 
         past_due = [{"date": j["pickup_date"], "title": j["title"],
-                     "artwork": j.get("artwork"),
                      "days_over": (today - j["pickup_date"]).days}
                     for j in jobs if j["pickup_date"] < today]
         past_due.sort(key=lambda r: r["days_over"], reverse=True)
