@@ -509,21 +509,6 @@ def find_match(job, index, claimed, jobs_per_client_day):
     return None, None
 
 
-def looks_ambiguous(job, index, claimed):
-    """An unmatched order that has a same-day event for the same client.
-
-    Almost certainly the same job with a code that drifted. Rather than guess,
-    say so and write nothing -- inserting would duplicate, claiming the event
-    might steal another artwork's.
-    """
-    for event in index["by_day"].get(job["pickup_date"], []):
-        if event["id"] in claimed:
-            continue
-        if job["client"].lower() in (event.get("summary") or "").lower():
-            return event
-    return None
-
-
 def build_body(job):
     start = datetime.combine(job["pickup_date"], datetime.min.time()).replace(
         tzinfo=TZ, hour=EVENT_TIME_HOUR
@@ -661,21 +646,6 @@ def main():
 
         claimed, tally = set(), {}
         for job in jobs:
-            existing, _ = find_match(job, index, claimed, jobs_per_client_day)
-            clash = None if existing else looks_ambiguous(job, index, claimed)
-            if clash is not None:
-                report["flags"].append({
-                    "severity": "blocking",
-                    "reason": "no event with this code, but one exists that day "
-                              f"for this client ({clash.get('summary')!r})",
-                    "artworkCode": job["job_code"], "client": job["client"],
-                    "project": None, "artwork": job["artwork"],
-                    "pickDate": str(job["pickup_date"]), "projectId": None,
-                })
-                print(f"  AMBIGUOUS {job['title']}: {clash.get('summary')!r} "
-                      "is the same client that day. Writing nothing.")
-                tally["ambiguous"] = tally.get("ambiguous", 0) + 1
-                continue
             try:
                 result = upsert_event(service, job, index, claimed,
                                       jobs_per_client_day, dry_run)
