@@ -265,22 +265,34 @@ Run the workflow by hand any time:
 
 ## Marking something done
 
-An order leaves the digest only when **both** have happened:
+A job leaves the digest only when **both** have happened:
 
-1. It is marked delivered in **Virtual Framer**, and
+1. It is marked complete in **Virtual Framer**, and
 2. Its calendar event title contains *done*, *paid*, *picked up* or *complete*
 
-Either one on its own leaves it listed. That is deliberate — it keeps nagging
-until both records agree, so nothing gets quietly lost because one system was
-updated and the other was not.
+Either alone leaves it listed. The calendar mark is a second pair of eyes, so
+a job marked complete by mistake still gets noticed. The cost is that
+completed work stays on the list until someone retitles the event — that is
+the double check working, not a fault. A client with six pieces needs six
+events retitled.
 
-The one exception: an order with **no calendar event at all**. There is
-nothing to mark, so Virtual Framer alone decides. Without that, every order
-predating the calendar sync would reappear forever — 182 of them today.
+The one exception is an order with **no calendar event at all**: there is
+nothing to mark, so Virtual Framer decides alone. Inside the 90-day window
+this currently applies to nothing — every order in the window has an event.
 
-Follow-ups work differently. They exist only on the calendar and have no
-Virtual Framer record to confirm against, so a done word in the title is the
-only signal there is, and it does drop them.
+Follow-ups are different. They exist only on the calendar and have no Virtual
+Framer record to check against, so a done word in the title is the only
+signal and it does drop them.
 
 None of this affects the **sync**, which never modifies an existing event
-whatever its title says. This is purely about what the digest lists.
+whatever its title says. This is only about what the digest lists.
+
+## A note on order status
+
+`isDelivered` is 2 while the job is still the shop's work, and 1, 4 or 6 once
+it is complete — delivered, picked up or shipped.
+
+The web app has an `orderComletedStatusDeafult()` enum whose ids overlap
+those numbers. **It is a different field.** Reading one as the other makes 2
+mean "Completed - To be delivered", which would say every order in the system
+is complete and nothing is in production. It is not.

@@ -89,6 +89,11 @@ FOLLOW_UP_PREFIX = "follow up"
 LOOKAHEAD_DAYS = sync.DAYS_AHEAD
 LOOKBACK_DAYS = sync.DAYS_BACK
 
+# How far to look for calendar events, as opposed to orders. Deliberately much
+# wider: an event may sit far from its order's current pickup date.
+EVENT_LOOKBACK_DAYS = 365 * 3
+EVENT_LOOKAHEAD_DAYS = 365
+
 
 def fmt(d):
     return f"{d:%m-%d-%y}"
@@ -156,15 +161,24 @@ def production_finished(row):
 def still_outstanding(row, event):
     """Should this order still appear in the digest?
 
-    This is a production digest, so Virtual Framer decides on its own: once
-    the framing is complete the job is off, regardless of what the calendar
-    event says or whether the piece has been collected.
+    Two confirmations are needed to take a job off: complete in Virtual
+    Framer, and a done word on its calendar event. Either alone leaves it
+    listed. That is deliberate -- the calendar mark is a second pair of eyes,
+    so a job marked complete by mistake still gets noticed.
 
-    The calendar is deliberately not consulted. Requiring a done word there as
-    well kept completed work on the list for days, which is what made the
-    digest wrong.
+    The cost is that completed work stays listed until someone retitles the
+    event. That is the point of the double check, not a fault in it.
+
+    One exception: an order with no calendar event has nothing to mark, so
+    Virtual Framer decides alone. Without it, every order predating the
+    calendar sync would sit in the digest forever.
     """
-    return not production_finished(row)
+    if not production_finished(row):
+        return True
+    if event is None:
+        return False
+    return not sync.title_looks_done(event.get("summary") or "",
+                                     (row.get("clientName") or "").strip())
 
 
 def collect_follow_ups(cal, today):
@@ -307,10 +321,15 @@ def main():
         cal = sync.gcal_service()
 
         # Index the calendar once so each order can be checked against it.
+        # Load far more calendar history than the digest reports on. A pickup
+        # date can move in Virtual Framer while the event stays where it was --
+        # the sync never moves an event -- so an order inside the window can
+        # have its event well outside it. Loading only the window makes that
+        # event invisible and the order looks as though it never had one.
         events = sync.load_existing_events(
             cal,
-            today - datetime.timedelta(days=LOOKBACK_DAYS),
-            today + datetime.timedelta(days=LOOKAHEAD_DAYS))
+            today - datetime.timedelta(days=EVENT_LOOKBACK_DAYS),
+            today + datetime.timedelta(days=EVENT_LOOKAHEAD_DAYS))
         by_code = {}
         for event in events["all"]:
             code = ((event.get("extendedProperties", {}) or {}).get(
