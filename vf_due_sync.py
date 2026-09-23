@@ -36,20 +36,24 @@ VF_ORIGIN = "https://backend.virtualframer.com"
 VF_APP_URL = f"{VF_ORIGIN}/#/workshop/workflow/summary"
 VF_ENDPOINT = f"{VF_ORIGIN}/prod-api/companyProjects/web/pinned/withoutPrice"
 
-# isDelivered values seen in this shop's data: 1, 2, 4 and 6.
+# isDelivered, as observed in this shop's data: 1, 2, 4 and 6.
 #
-# What is established: 2 is what the shop sees as "Ongoing - New" -- the job
-# is still theirs. 1 is delivered; an order marked delivered in the app moves
-# from 2 to 1. The app's own "ongoing" view excludes 1, 4 and 6, so 4 and 6
-# are also states where the piece has left, most likely picked up and shipped,
-# but that has not been confirmed with the shop.
+#   2  the job is NOT complete -- still the shop's work
+#   1  complete, delivered
+#   4  complete, picked up
+#   6  complete, shipped
 #
-# Not to be confused with orderComletedStatusDeafult() in the web app, which
-# is a different field with overlapping numbers. Mapping isDelivered onto that
-# enum gives wrong answers -- it labels 2 as "Completed - To be delivered"
-# when the shop sees it as "Ongoing - New".
-FINISHED_WITH = {1, 4, 6}
-EXCLUDE_DELIVERED = ",".join(str(v) for v in sorted(FINISHED_WITH))
+# The web app has an orderComletedStatusDeafult() enum with ids that overlap
+# these numbers and it is tempting to read one as the other. Do not. That enum
+# calls 2 "Completed - To be delivered", which would mean every order this
+# shop has is complete and nothing is in production. The shop says otherwise,
+# and the 19 orders sitting at 2 are precisely the ones they have not
+# finished. Different field, same numbers.
+IN_PRODUCTION_STATE = 2
+COMPLETE_STATES = {1, 4, 6}
+
+FINISHED_WITH = COMPLETE_STATES
+EXCLUDE_DELIVERED = ",".join(str(v) for v in sorted(COMPLETE_STATES))
 
 TOKEN_CACHE = HERE / ".vf_token.json"
 

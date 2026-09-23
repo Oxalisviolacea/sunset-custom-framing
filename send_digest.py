@@ -29,7 +29,7 @@ import vf_due_sync as sync
 # Statuses that mean the shop is finished with the job -- it has gone to the
 # customer, or been parked. See FINISHED_WITH in vf_due_sync for the full list
 # of what each number means.
-VF_DONE_STATES = sync.FINISHED_WITH
+VF_DONE_STATES = sync.COMPLETE_STATES
 
 # Not hardcoded: this repository is public, and this address doubles as the
 # Virtual Framer username. Set DIGEST_TO in .env or the environment.
@@ -136,39 +136,35 @@ def find_event(row, by_code, _unused=None):
     return by_code.get(code) if code else None
 
 
-KNOWN_STATES = {1, 2, 4, 6}
+KNOWN_STATES = sync.COMPLETE_STATES | {sync.IN_PRODUCTION_STATE}
 
 
 def production_finished(row):
     """Has the shop finished with this job?
 
-    Two signals, and they agree perfectly across every order: isDelivered is
-    1, 4 or 6, and readDate is set. 240 of 240 finished orders have a
-    readDate; none of the 19 unfinished ones do. readDate is the more durable
-    test -- a status value nobody has seen yet would still set it -- so it
-    decides, with the status list as a second opinion.
+    Finished means the framing is done, not that the piece has gone. Every
+    Completed status counts, including the ones where it is still sitting in
+    the shop waiting to be collected. On hold counts too.
+
+    readDate is not used: it is set when a job is marked off, which happens at
+    handover rather than at completion, so it misses exactly the cases this
+    digest is supposed to drop.
     """
-    return bool(row.get("readDate")) or row.get("isDelivered") in VF_DONE_STATES
+    return row.get("isDelivered") in VF_DONE_STATES
 
 
 def still_outstanding(row, event):
     """Should this order still appear in the digest?
 
-    Two confirmations are needed to take it off: delivered in Virtual Framer,
-    and marked done on the calendar. Either one alone leaves it listed -- that
-    is the point, it nags until both are recorded.
+    This is a production digest, so Virtual Framer decides on its own: once
+    the framing is complete the job is off, regardless of what the calendar
+    event says or whether the piece has been collected.
 
-    The exception is an order with no calendar event at all. There is nothing
-    to mark, so Virtual Framer alone decides. Without this, every order
-    predating the calendar sync would reappear forever.
+    The calendar is deliberately not consulted. Requiring a done word there as
+    well kept completed work on the list for days, which is what made the
+    digest wrong.
     """
-    vf_done = production_finished(row)
-    if not vf_done:
-        return True
-    if event is None:
-        return False
-    return not sync.title_looks_done(event.get("summary") or "",
-                                     (row.get("clientName") or "").strip())
+    return not production_finished(row)
 
 
 def collect_follow_ups(cal, today):
