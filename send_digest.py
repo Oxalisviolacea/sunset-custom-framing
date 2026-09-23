@@ -154,6 +154,38 @@ def production_finished(row):
     return row.get("isDelivered") in VF_DONE_STATES
 
 
+class Problems:
+    """Things that went wrong, written for whoever opens the email at 7am.
+
+    Each one says what happened, why it matters, and what to do. A traceback
+    is not any of those, so the raw text goes last and only if it helps.
+    """
+
+    def __init__(self):
+        self.items = []
+
+    def add(self, what, why, action, detail=None):
+        self.items.append({"what": what, "why": why,
+                           "action": action, "detail": detail})
+
+    def __bool__(self):
+        return bool(self.items)
+
+    def __len__(self):
+        return len(self.items)
+
+    def as_text(self):
+        out = []
+        for i, p in enumerate(self.items, 1):
+            out.append(f"{i}. {p['what']}\n")
+            out.append(f"   What it means: {p['why']}\n")
+            out.append(f"   What to do:    {p['action']}\n")
+            if p["detail"]:
+                out.append(f"   Detail:        {p['detail']}\n")
+            out.append("\n")
+        return "".join(out)
+
+
 def pickup_of(row):
     """The order's pickup date in local time, or date.max if it has none."""
     raw = row.get("pickDate")
@@ -181,9 +213,13 @@ def find_event_anywhere(cal, code):
             privateExtendedProperty=f"vfJobCode={code}",
             singleEvents=True, showDeleted=False, maxResults=10,
         ).execute().get("items", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        raise LookupFailed(f"{type(exc).__name__}: {exc}") from exc
     return found[0] if found else None
+
+
+class LookupFailed(Exception):
+    """The calendar could not be asked about one specific event."""
 
 
 def still_outstanding(row, event):
@@ -334,8 +370,34 @@ def gather_from_report():
     return errors, attention
 
 
+def send_problem_report(problems):
+    """A second, separate email about what went wrong.
+
+    Kept apart from the digest on purpose. The digest is the day's work and
+    should read cleanly; this is for whoever has to sort the problem out, and
+    it says what happened, what it means and what to do about it.
+    """
+    count = len(problems)
+    subject = (f"Production Digest \u2014 {count} thing"
+               f"{'' if count == 1 else 's'} to look at")
+    body = (
+        "The digest was sent, so today's list is in your inbox as usual.\n"
+        "These are the things that did not go smoothly while building it.\n\n"
+        + problems.as_text() +
+        "----\n"
+        "None of this stops the digest arriving. It is here so problems are "
+        "visible rather than silent.\n"
+    )
+    try:
+        send_mail(gmail(), ALERT_TO, subject, text=body)
+        print(f"Problem report sent to {ALERT_TO} ({count} item(s))")
+    except Exception as exc:
+        print(f"Could not send the problem report: {type(exc).__name__}: {exc}")
+
+
 def main():
     dry_run = "--send" not in sys.argv
+    problems = Problems()
     if not ALERT_TO:
         sys.exit("ERROR: DIGEST_TO is not set. Put the recipient in .env "
                  "(see .env.example).")
@@ -363,9 +425,16 @@ def main():
         unknown = sorted({r.get("isDelivered") for r in rows
                           if r.get("isDelivered") not in KNOWN_STATES})
         for state in unknown:
-            errors_early.append(
-                f"unfamiliar isDelivered value {state!r} -- nobody has told us "
-                "whether that means the shop is finished with the job")
+            problems.add(
+                what=f"Virtual Framer reported an order status nobody has "
+                     f"seen before (isDelivered = {state}).",
+                why="The digest knows 2 means the job is still yours, and 1, "
+                    "4 and 6 mean it is finished. It does not know what this "
+                    "one means, so it has assumed the job is still yours and "
+                    "left it listed. It may not belong here.",
+                action="Tell whoever maintains this what that status is "
+                       "called in Virtual Framer, so it can be handled "
+                       "properly.")
 
         window_lo = today - datetime.timedelta(days=LOOKBACK_DAYS)
         window_hi = today + datetime.timedelta(days=LOOKAHEAD_DAYS)
@@ -379,9 +448,23 @@ def main():
             if event is None and window_lo <= pickup_of(row) <= window_hi:
                 code = (row.get("vfReference") or "").strip().upper()
                 if code:
-                    event = find_event_anywhere(cal, code)
-                    if event is not None:
-                        looked_up += 1
+                    try:
+                        event = find_event_anywhere(cal, code)
+                        if event is not None:
+                            looked_up += 1
+                    except LookupFailed as exc:
+                        problems.add(
+                            what=f"Could not check the calendar for "
+                                 f"{row.get('clientName')} \u2014 {code}.",
+                            why="That job is treated as having no calendar "
+                                "event, so Virtual Framer alone decided whether "
+                                "it belongs in this digest. If its event is "
+                                "marked done it may be listed here wrongly, or "
+                                "missing from here wrongly.",
+                            action="Look at that one job on the calendar by "
+                                   "hand today. If this keeps happening, the "
+                                   "Google connection needs looking at.",
+                            detail=str(exc))
             if still_outstanding(row, event):
                 outstanding.append(row)
         if looked_up:
@@ -429,14 +512,32 @@ def main():
         for a in attention:
             print(f"    ATTN   {a}")
 
+        # Anything the sync itself reported belongs in the same diagnostic.
+        for err in errors:
+            problems.add(
+                what="The overnight sync reported a failure.",
+                why="The pickup calendar may not have been updated, so this "
+                    "digest could be missing jobs or showing stale ones.",
+                action="Run ./run_daily.sh by hand on the shop computer. If "
+                       "it fails again, the message below says why.",
+                detail=err)
+
         if dry_run:
             sync.HERE.joinpath("digest_preview.html").write_text(html)
             print("\nDRY RUN — not sent. Preview: digest_preview.html")
+            if problems:
+                print(f"\n{len(problems)} problem(s) would also be emailed:\n")
+                print(problems.as_text())
             print("Re-run with --send to email it.")
             return
 
+        # The digest goes first and on its own. A problem with one job must
+        # not stop the other thirty being reported.
         send_mail(gmail(), ALERT_TO, subject, html=html)
         print(f"Sent to {ALERT_TO}")
+
+        if problems:
+            send_problem_report(problems)
 
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
