@@ -136,6 +136,21 @@ def find_event(row, by_code, _unused=None):
     return by_code.get(code) if code else None
 
 
+KNOWN_STATES = {1, 2, 4, 6}
+
+
+def production_finished(row):
+    """Has the shop finished with this job?
+
+    Two signals, and they agree perfectly across every order: isDelivered is
+    1, 4 or 6, and readDate is set. 240 of 240 finished orders have a
+    readDate; none of the 19 unfinished ones do. readDate is the more durable
+    test -- a status value nobody has seen yet would still set it -- so it
+    decides, with the status list as a second opinion.
+    """
+    return bool(row.get("readDate")) or row.get("isDelivered") in VF_DONE_STATES
+
+
 def still_outstanding(row, event):
     """Should this order still appear in the digest?
 
@@ -147,7 +162,7 @@ def still_outstanding(row, event):
     to mark, so Virtual Framer alone decides. Without this, every order
     predating the calendar sync would reappear forever.
     """
-    vf_done = row.get("isDelivered") in VF_DONE_STATES
+    vf_done = production_finished(row)
     if not vf_done:
         return True
     if event is None:
@@ -292,6 +307,7 @@ def main():
         today = datetime.datetime.now(sync.TZ).date()
 
         rows = fetch_every_order(token, company_id)
+        errors_early = []
         cal = sync.gcal_service()
 
         # Index the calendar once so each order can be checked against it.
@@ -305,6 +321,13 @@ def main():
                 "private", {}) or {}).get("vfJobCode")
             if code:
                 by_code[code.strip().upper()] = event
+
+        unknown = sorted({r.get("isDelivered") for r in rows
+                          if r.get("isDelivered") not in KNOWN_STATES})
+        for state in unknown:
+            errors_early.append(
+                f"unfamiliar isDelivered value {state!r} -- nobody has told us "
+                "whether that means the shop is finished with the job")
 
         outstanding = [r for r in rows
                        if still_outstanding(r, find_event(r, by_code))]
@@ -322,6 +345,7 @@ def main():
         follow_ups = collect_follow_ups(cal, today)
 
         errors, attention = gather_from_report()
+        errors += errors_early
         attention += [f"{f['reason']} — {f.get('client') or 'unknown'}"
                       for f in flags if f.get("severity") == "blocking"]
         attention = list(dict.fromkeys(attention))
