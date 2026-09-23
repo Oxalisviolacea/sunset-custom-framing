@@ -36,12 +36,21 @@ VF_ORIGIN = "https://backend.virtualframer.com"
 VF_APP_URL = f"{VF_ORIGIN}/#/workshop/workflow/summary"
 VF_ENDPOINT = f"{VF_ORIGIN}/prod-api/companyProjects/web/pinned/withoutPrice"
 
-# isDelivered states the app's own "ongoing" view hides. Keeping this identical
-# to the web UI is what makes our row set match what you see on screen.
-EXCLUDE_DELIVERED = "1,4,6"
+# isDelivered values seen in this shop's data: 1, 2, 4 and 6.
+#
+# What is established: 2 is what the shop sees as "Ongoing - New" -- the job
+# is still theirs. 1 is delivered; an order marked delivered in the app moves
+# from 2 to 1. The app's own "ongoing" view excludes 1, 4 and 6, so 4 and 6
+# are also states where the piece has left, most likely picked up and shipped,
+# but that has not been confirmed with the shop.
+#
+# Not to be confused with orderComletedStatusDeafult() in the web app, which
+# is a different field with overlapping numbers. Mapping isDelivered onto that
+# enum gives wrong answers -- it labels 2 as "Completed - To be delivered"
+# when the shop sees it as "Ongoing - New".
+FINISHED_WITH = {1, 4, 6}
+EXCLUDE_DELIVERED = ",".join(str(v) for v in sorted(FINISHED_WITH))
 
-VF_LOGIN_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/login"
-VF_USERINFO_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/users/checkUserInfo"
 TOKEN_CACHE = HERE / ".vf_token.json"
 
 # Confirmed against the live endpoint and the app's own bundle, which ships

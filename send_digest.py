@@ -26,8 +26,10 @@ import requests
 
 import vf_due_sync as sync
 
-# isDelivered values the Virtual Framer "ongoing" view treats as finished.
-VF_DONE_STATES = {1, 4, 6}
+# Statuses that mean the shop is finished with the job -- it has gone to the
+# customer, or been parked. See FINISHED_WITH in vf_due_sync for the full list
+# of what each number means.
+VF_DONE_STATES = sync.FINISHED_WITH
 
 # Not hardcoded: this repository is public, and this address doubles as the
 # Virtual Framer username. Set DIGEST_TO in .env or the environment.
@@ -176,10 +178,16 @@ def collect_follow_ups(cal, today):
 
 def table(rows, colour=None, show_overdue=False):
     style = f' style="color:{colour}; font-weight:600;"' if colour else ""
+    # A client often has several pieces due the same day, and the titles differ
+    # only by a five-character code. The artwork name is what tells them apart.
+    has_artwork = any(r.get("artwork") for r in rows)
     head = ('<tr><th style="text-align:left;padding-right:12px;">Due</th>'
             + ('<th style="text-align:left;padding-right:12px;">Overdue</th>'
                if show_overdue else "")
-            + '<th style="text-align:left;">Job</th></tr>')
+            + '<th style="text-align:left;">Job</th>'
+            + ('<th style="text-align:left;padding-left:12px;">Artwork</th>'
+               if has_artwork else "")
+            + '</tr>')
     html = ['<table style="border-collapse:collapse; width:100%;">', head]
     for r in rows:
         overdue = ""
@@ -188,10 +196,13 @@ def table(rows, colour=None, show_overdue=False):
             label = "1 day" if days == 1 else f"{days} days"
             overdue = (f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">'
                        f'{label}</td>')
+        artwork = (f'<td style="padding:6px 0 6px 12px; white-space:nowrap;">'
+                   f'{r.get("artwork") or ""}</td>') if has_artwork else ""
         html.append(f'<tr{style}>'
                     f'<td style="padding:6px 12px 6px 0; white-space:nowrap;">{fmt(r["date"])}</td>'
                     f'{overdue}'
-                    f'<td style="padding:6px 0;">{r["title"]}</td></tr>')
+                    f'<td style="padding:6px 0;">{r["title"]}</td>'
+                    f'{artwork}</tr>')
     html.append("</table>")
     return "".join(html)
 
@@ -300,10 +311,12 @@ def main():
         jobs, flags = sync.to_jobs(outstanding)
 
         past_due = [{"date": j["pickup_date"], "title": j["title"],
+                     "artwork": j.get("artwork"),
                      "days_over": (today - j["pickup_date"]).days}
                     for j in jobs if j["pickup_date"] < today]
         past_due.sort(key=lambda r: r["days_over"], reverse=True)
-        upcoming = [{"date": j["pickup_date"], "title": j["title"]}
+        upcoming = [{"date": j["pickup_date"], "title": j["title"],
+                     "artwork": j.get("artwork")}
                     for j in jobs if j["pickup_date"] >= today]
 
         follow_ups = collect_follow_ups(cal, today)
