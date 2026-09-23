@@ -128,39 +128,10 @@ def fetch_every_order(token, company_id):
     return body.get("data") or []
 
 
-def find_event(row, by_code, by_day_client):
-    """The calendar event for an order, tolerating mis-OCR'd codes.
-
-    The old script stored whatever Tesseract read, so an order whose real code
-    is 0F3KZ can be sitting on the calendar as OF3KZ. An exact lookup misses
-    those and wrongly concludes the order was never put on the calendar --
-    which, under the two-confirmation rule, silently drops it from the digest.
-
-    Same tiers the sync uses: exact code, then the confusable-character fold,
-    then same day and client.
-    """
+def find_event(row, by_code, _unused=None):
+    """The event for this order, by code only. No fuzzy fallbacks."""
     code = (row.get("vfReference") or "").strip().upper()
-    if not code:
-        return None
-    if code in by_code:
-        return by_code[code]
-
-    folded = sync.canon(code)
-    for stored, event in by_code.items():
-        if sync.canon(stored) == folded:
-            return event
-
-    raw = row.get("pickDate")
-    client = (row.get("clientName") or "").strip().lower()
-    if raw and client:
-        try:
-            day = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=datetime.timezone.utc).astimezone(sync.TZ).date()
-        except ValueError:
-            return None
-        for event in by_day_client.get((day, client), []):
-            return event
-    return None
+    return by_code.get(code) if code else None
 
 
 def still_outstanding(row, event):
@@ -317,22 +288,15 @@ def main():
             cal,
             today - datetime.timedelta(days=LOOKBACK_DAYS),
             today + datetime.timedelta(days=LOOKAHEAD_DAYS))
-        by_code, by_day_client = {}, {}
+        by_code = {}
         for event in events["all"]:
             code = ((event.get("extendedProperties", {}) or {}).get(
                 "private", {}) or {}).get("vfJobCode")
             if code:
                 by_code[code.strip().upper()] = event
-            day = sync.event_day(event)
-            title = (event.get("summary") or "").lower()
-            if day:
-                for part in title.replace("—", "-").split("-"):
-                    part = part.strip()
-                    if len(part) > 3:
-                        by_day_client.setdefault((day, part), []).append(event)
 
         outstanding = [r for r in rows
-                       if still_outstanding(r, find_event(r, by_code, by_day_client))]
+                       if still_outstanding(r, find_event(r, by_code))]
         jobs, flags = sync.to_jobs(outstanding)
 
         past_due = [{"date": j["pickup_date"], "title": j["title"],

@@ -378,17 +378,6 @@ def to_jobs(rows):
 
 # ============================== Google Calendar ==============================
 
-# Characters Tesseract routinely swapped in the old OCR pipeline. Folding these
-# lets us recognise an event the old script wrote as "Q30B8" when the real code
-# is "YZA78", so we update it instead of creating a second event.
-CONFUSABLES = str.maketrans({"O": "0", "I": "1", "L": "1", "S": "5",
-                             "B": "8", "Z": "2", "G": "6"})
-
-
-def canon(code):
-    return (code or "").strip().upper().translate(CONFUSABLES)
-
-
 DONE_RE = re.compile(
     r"\b(" + "|".join(w.replace(" ", r"\s+") for w in DONE_WORDS) + r")\b",
     re.IGNORECASE,
@@ -506,59 +495,33 @@ def load_existing_events(service, start_date, end_date):
     return {"all": events, "by_code": by_code, "by_day": by_day}
 
 
-def _edit_distance_1(a, b):
-    """True when a and b differ by at most one substitution/insert/delete."""
-    if a == b:
-        return True
-    if abs(len(a) - len(b)) > 1:
-        return False
-    if len(a) == len(b):
-        return sum(x != y for x, y in zip(a, b)) == 1
-    short, long = (a, b) if len(a) < len(b) else (b, a)
-    for i in range(len(long)):
-        if short == long[:i] + long[i + 1:]:
-            return True
-    return False
-
-
 def find_match(job, index, claimed, jobs_per_client_day):
-    """Locate an existing event for this order, widest-confidence first.
+    """The event for this order, matched on its code and nothing else.
 
-    Anything already claimed by another job this run is off the table, so two
-    artworks picked up the same day can never collapse onto one event.
+    No fuzzy fallbacks. Virtual Framer's codes are exact and the calendar's
+    were repaired to match, so anything that does not match by code is either
+    a genuinely new order or a problem worth a human looking at. Guessing
+    between those two is how the wrong event gets claimed.
     """
     for event in index["by_code"].get(job["job_code"], []):
         if event["id"] not in claimed:
             return event, "exact code"
-
-    same_day = [e for e in index["by_day"].get(job["pickup_date"], [])
-                if e["id"] not in claimed]
-
-    wanted = canon(job["job_code"])
-    for event in same_day:
-        if wanted and canon(event_code(event)) == wanted:
-            return event, "legacy code"
-
-    # Same client, same day, code off by a single character. Tesseract made
-    # errors outside the fold map too, U misread as J for instance, and without
-    # this the sync would insert a second event beside the damaged one.
-    # Deliberately narrow: same day AND same client AND one character.
-    for event in same_day:
-        existing_code = event_code(event)
-        if (existing_code
-                and job["client"].lower() in (event.get("summary") or "").lower()
-                and _edit_distance_1(job["job_code"], existing_code)):
-            return event, "near-miss code"
-
-    # Client name alone is only safe when this client has exactly one pickup
-    # that day and exactly one candidate event matches.
-    if jobs_per_client_day.get((job["client"], job["pickup_date"]), 0) == 1:
-        hits = [e for e in same_day
-                if job["client"].lower() in (e.get("summary") or "").lower()]
-        if len(hits) == 1:
-            return hits[0], "client + date"
-
     return None, None
+
+
+def looks_ambiguous(job, index, claimed):
+    """An unmatched order that has a same-day event for the same client.
+
+    Almost certainly the same job with a code that drifted. Rather than guess,
+    say so and write nothing -- inserting would duplicate, claiming the event
+    might steal another artwork's.
+    """
+    for event in index["by_day"].get(job["pickup_date"], []):
+        if event["id"] in claimed:
+            continue
+        if job["client"].lower() in (event.get("summary") or "").lower():
+            return event
+    return None
 
 
 def build_body(job):
@@ -689,16 +652,6 @@ def main():
             key = (job["client"], job["pickup_date"])
             jobs_per_client_day[key] = jobs_per_client_day.get(key, 0) + 1
 
-        folded = {}
-        for job in jobs:
-            folded.setdefault(canon(job["job_code"]), []).append(job["job_code"])
-        for codes in folded.values():
-            if len(codes) > 1:
-                report["flags"].append({"severity": "blocking",
-                                        "reason": "codes indistinguishable after folding",
-                                        "artworkCode": ", ".join(codes)})
-                print(f"WARNING: codes {codes} are indistinguishable after folding.")
-
         index = load_existing_events(service, jobs[0]["pickup_date"], jobs[-1]["pickup_date"])
         report["existing_events_in_window"] = len(index["all"])
         print(f"Existing events in window: {len(index['all'])}")
@@ -708,6 +661,20 @@ def main():
 
         claimed, tally = set(), {}
         for job in jobs:
+            clash = looks_ambiguous(job, index, claimed)
+            if clash is not None:
+                report["flags"].append({
+                    "severity": "blocking",
+                    "reason": "no event with this code, but one exists that day "
+                              f"for this client ({clash.get('summary')!r})",
+                    "artworkCode": job["job_code"], "client": job["client"],
+                    "project": None, "artwork": job["artwork"],
+                    "pickDate": str(job["pickup_date"]), "projectId": None,
+                })
+                print(f"  AMBIGUOUS {job['title']}: {clash.get('summary')!r} "
+                      "is the same client that day. Writing nothing.")
+                tally["ambiguous"] = tally.get("ambiguous", 0) + 1
+                continue
             try:
                 result = upsert_event(service, job, index, claimed,
                                       jobs_per_client_day, dry_run)

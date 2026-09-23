@@ -80,7 +80,13 @@ def main():
                     by_day_client.setdefault((day, part), []).append(event)
 
     repairs, creations, uncertain = [], [], []
-    claimed = set()
+
+    # Orders whose code matches an event exactly claim it before anything else
+    # gets to guess. Without this an order can steal the event belonging to a
+    # different artwork on the same day for the same client.
+    claimed = {by_code[(r.get("vfReference") or "").strip().upper()]["id"]
+               for r in rows
+               if (r.get("vfReference") or "").strip().upper() in by_code}
 
     for row in rows:
         code = (row.get("vfReference") or "").strip().upper()
