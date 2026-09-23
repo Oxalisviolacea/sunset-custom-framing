@@ -280,6 +280,17 @@ The one exception is an order with **no calendar event at all**: there is
 nothing to mark, so Virtual Framer decides alone. Inside the 90-day window
 this currently applies to nothing — every order in the window has an event.
 
+Finding that event is not always straightforward. A pickup date can move in
+Virtual Framer while the event stays where it was, because the sync never
+moves an event. So an order inside the 90-day window can have its event
+outside it, where the windowed load will not see it — and it would then look
+like an order with no event and skip the calendar half of the check.
+
+When an order in the window has no event in the window, the digest asks the
+calendar for that one event by its `vfJobCode`, with no date bounds. Orders
+outside the window are not chased: their events are legitimately elsewhere
+and they cannot affect the digest. Today exactly one order needs this.
+
 Follow-ups are different. They exist only on the calendar and have no Virtual
 Framer record to check against, so a done word in the title is the only
 signal and it does drop them.

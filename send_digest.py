@@ -89,10 +89,6 @@ FOLLOW_UP_PREFIX = "follow up"
 LOOKAHEAD_DAYS = sync.DAYS_AHEAD
 LOOKBACK_DAYS = sync.DAYS_BACK
 
-# How far to look for calendar events, as opposed to orders. Deliberately much
-# wider: an event may sit far from its order's current pickup date.
-EVENT_LOOKBACK_DAYS = 365 * 3
-EVENT_LOOKAHEAD_DAYS = 365
 
 
 def fmt(d):
@@ -156,6 +152,38 @@ def production_finished(row):
     digest is supposed to drop.
     """
     return row.get("isDelivered") in VF_DONE_STATES
+
+
+def pickup_of(row):
+    """The order's pickup date in local time, or date.max if it has none."""
+    raw = row.get("pickDate")
+    if not raw:
+        return datetime.date.max
+    try:
+        return datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc).astimezone(sync.TZ).date()
+    except ValueError:
+        return datetime.date.max
+
+
+def find_event_anywhere(cal, code):
+    """Ask the calendar for one specific event, with no date bounds.
+
+    A pickup date can move in Virtual Framer while the event stays where it
+    was, because the sync never moves an event. So an order inside the digest
+    window can have its event outside it, and the windowed load will not see
+    it. Rather than widening the window for everything, look up the few that
+    come back empty -- usually none, at most a handful.
+    """
+    try:
+        found = cal.events().list(
+            calendarId=sync.CALENDAR_ID,
+            privateExtendedProperty=f"vfJobCode={code}",
+            singleEvents=True, showDeleted=False, maxResults=10,
+        ).execute().get("items", [])
+    except Exception:
+        return None
+    return found[0] if found else None
 
 
 def still_outstanding(row, event):
@@ -321,15 +349,10 @@ def main():
         cal = sync.gcal_service()
 
         # Index the calendar once so each order can be checked against it.
-        # Load far more calendar history than the digest reports on. A pickup
-        # date can move in Virtual Framer while the event stays where it was --
-        # the sync never moves an event -- so an order inside the window can
-        # have its event well outside it. Loading only the window makes that
-        # event invisible and the order looks as though it never had one.
         events = sync.load_existing_events(
             cal,
-            today - datetime.timedelta(days=EVENT_LOOKBACK_DAYS),
-            today + datetime.timedelta(days=EVENT_LOOKAHEAD_DAYS))
+            today - datetime.timedelta(days=LOOKBACK_DAYS),
+            today + datetime.timedelta(days=LOOKAHEAD_DAYS))
         by_code = {}
         for event in events["all"]:
             code = ((event.get("extendedProperties", {}) or {}).get(
@@ -344,8 +367,25 @@ def main():
                 f"unfamiliar isDelivered value {state!r} -- nobody has told us "
                 "whether that means the shop is finished with the job")
 
-        outstanding = [r for r in rows
-                       if still_outstanding(r, find_event(r, by_code))]
+        window_lo = today - datetime.timedelta(days=LOOKBACK_DAYS)
+        window_hi = today + datetime.timedelta(days=LOOKAHEAD_DAYS)
+
+        outstanding, looked_up = [], 0
+        for row in rows:
+            event = find_event(row, by_code)
+            # Only chase a missing event for orders the digest can actually
+            # report on. An old order's event is outside the window quite
+            # legitimately, and looking each one up is a request per order.
+            if event is None and window_lo <= pickup_of(row) <= window_hi:
+                code = (row.get("vfReference") or "").strip().upper()
+                if code:
+                    event = find_event_anywhere(cal, code)
+                    if event is not None:
+                        looked_up += 1
+            if still_outstanding(row, event):
+                outstanding.append(row)
+        if looked_up:
+            print(f"  {looked_up} event(s) found outside the window by direct lookup")
         jobs, flags = sync.to_jobs(outstanding)
 
         past_due = [{"date": j["pickup_date"], "title": j["title"],
