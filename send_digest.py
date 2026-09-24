@@ -35,6 +35,14 @@ VF_DONE_STATES = sync.COMPLETE_STATES
 # Virtual Framer username. Set DIGEST_TO in .env or the environment.
 ALERT_TO = os.environ.get("DIGEST_TO") or ""
 
+# Follow-ups are hand-made calendar events; this is how they are recognised.
+FOLLOW_UP_PREFIX = "follow up"
+
+# Same window the sync uses. An order the sync would never put on the calendar
+# should not appear in the digest either.
+LOOKAHEAD_DAYS = sync.DAYS_AHEAD
+LOOKBACK_DAYS = sync.DAYS_BACK
+
 # Shown whenever something looks like an expired or revoked credential, so the
 # person reading the alert at 7am does not have to find the runbook.
 AUTH_FIX_TEXT = """HOW TO FIX A GOOGLE SIGN-IN FAILURE
@@ -78,21 +86,34 @@ AUTH_FIX_HTML = (
     '</div>')
 
 
+# Python's own error types mean the script is broken, never that a credential
+# is. Saying "re-authorise" to someone holding a NameError sends them off to
+# fix something that was never wrong.
+CODE_FAULTS = (
+    "nameerror", "typeerror", "attributeerror", "keyerror", "indexerror",
+    "valueerror", "importerror", "modulenotfounderror", "syntaxerror",
+    "zerodivisionerror", "unboundlocalerror",
+)
+
+# Phrases that only appear when a credential really is the problem. Matched as
+# whole phrases, not substrings -- "login" inside VF_LOGIN_ENDPOINT is how a
+# NameError ended up advising someone to reset their Google token.
+AUTH_SIGNALS = (
+    "invalid_grant", "invalid_client", "unauthorized", "unauthorised",
+    "wrong password", "bad credentials", "token has been expired",
+    "token has been revoked", "credentials do not", "access_denied",
+    "insufficient permission", "insufficient authentication",
+    "http 401", "httperror 401", "http 403", "httperror 403",
+    "error 401", "error 403",
+)
+
+
 def looks_like_auth_trouble(text):
+    """Is this really a credential problem, or just a broken script?"""
     lowered = (text or "").lower()
-    return any(word in lowered for word in (
-        "credential", "token", "unauthorized", "invalid_grant", "expired",
-        "403", "401", "wrong password", "login", "scope", "auth"))
-FOLLOW_UP_PREFIX = "follow up"
-# Same window the sync uses. An order the sync would never put on the calendar
-# should not appear in the digest either.
-LOOKAHEAD_DAYS = sync.DAYS_AHEAD
-LOOKBACK_DAYS = sync.DAYS_BACK
-
-
-
-def fmt(d):
-    return f"{d:%m-%d-%y}"
+    if any(fault in lowered for fault in CODE_FAULTS):
+        return False
+    return any(signal in lowered for signal in AUTH_SIGNALS)
 
 
 def gmail():
@@ -263,6 +284,10 @@ def collect_follow_ups(cal, today):
         if day:
             out.append({"date": day, "title": title})
     return sorted(out, key=lambda f: f["date"])
+
+
+def fmt(d):
+    return f"{d:%m-%d-%y}"
 
 
 def table(rows, colour=None, show_overdue=False):

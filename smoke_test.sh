@@ -13,6 +13,9 @@ PY=./.venv/bin/python
 echo "== compile =="
 "$PY" -m py_compile vf_due_sync.py send_digest.py || exit 1
 
+echo "== names =="
+"$PY" check_names.py vf_due_sync.py send_digest.py || exit 1
+
 echo "== dry run with no cached token (forces the login path) =="
 mv .vf_token.json .vf_token.json.bak 2>/dev/null || true
 "$PY" vf_due_sync.py > /tmp/smoke_sync.log 2>&1; sync_rc=$?
