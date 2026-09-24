@@ -35,6 +35,8 @@ HERE = Path(__file__).resolve().parent
 VF_ORIGIN = "https://backend.virtualframer.com"
 VF_APP_URL = f"{VF_ORIGIN}/#/workshop/workflow/summary"
 VF_ENDPOINT = f"{VF_ORIGIN}/prod-api/companyProjects/web/pinned/withoutPrice"
+VF_LOGIN_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/login"
+VF_USERINFO_ENDPOINT = f"{VF_ORIGIN}/prod-api/api/users/checkUserInfo"
 
 # isDelivered, as observed in this shop's data: 1, 2, 4 and 6.
 #
