@@ -207,8 +207,13 @@ cron did eventually start firing once the repo was public, but around four
 hours late: a 14:23 slot ran at 18:08. Useless for a morning digest, and not
 worth a second scheduler to explain.
 
-The dedupe step stays. It no longer guards against two schedulers, but it
-still stops a retry or a manual dispatch producing a second digest.
+There is no once-per-day guard. The job runs when it is dispatched and sends
+when it runs. How often that happens is the schedule's business, not the
+script's — a "have we already done today" check inside the code meant an
+arbitrary midnight boundary, and made testing impossible until it passed.
+
+Dispatch it twice and you get two emails. That is the correct answer to
+someone asking for it twice.
 
 ### Rebuilding the Apps Script side
 
@@ -397,8 +402,13 @@ cron did eventually start firing once the repo was public, but around four
 hours late: a 14:23 slot ran at 18:08. Useless for a morning digest, and not
 worth a second scheduler to explain.
 
-The dedupe step stays. It no longer guards against two schedulers, but it
-still stops a retry or a manual dispatch producing a second digest.
+There is no once-per-day guard. The job runs when it is dispatched and sends
+when it runs. How often that happens is the schedule's business, not the
+script's — a "have we already done today" check inside the code meant an
+arbitrary midnight boundary, and made testing impossible until it passed.
+
+Dispatch it twice and you get two emails. That is the correct answer to
+someone asking for it twice.
 
 ### Rebuilding the Apps Script side
 

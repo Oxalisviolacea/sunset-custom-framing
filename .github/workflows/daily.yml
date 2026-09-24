@@ -7,10 +7,6 @@ on:
   # explain. Apps Script starts this, by dispatch: trigger/AppsScriptTrigger.gs
   workflow_dispatch:
 
-permissions:
-  actions: read
-  contents: read
-
 jobs:
   sync-and-digest:
     runs-on: ubuntu-latest
@@ -21,44 +17,16 @@ jobs:
       # scheduled jobs late, and an hour-equality test would reject a delayed
       # run and its DST twin both, so a late trigger would mean no run at all.
       # The offset does not shift when the run is late.
-      # Guards against the same day being processed twice -- an Apps Script
-      # retry, or someone dispatching by hand after the morning run. Nobody
-      # should get two digests.
-      - name: Has a run already succeeded today?
-        id: dedupe
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          today=$(TZ=America/New_York date +%Y-%m-%d)
-          count=$(gh run list --repo "${{ github.repository }}" \
-                    --workflow daily.yml --status success --limit 30 \
-                    --json createdAt --jq "[.[] | select(.createdAt >= \"${today}\")] | length" \
-                  || echo 0)
-          if [ "${{ inputs.force }}" = "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Forced: running even though ${count:-0} run(s) succeeded today."
-          elif [ "${count:-0}" -gt 0 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Already succeeded ${count} time(s) today; skipping so nobody gets a second email."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing has succeeded yet today; proceeding."
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.dedupe.outputs.skip != 'true'
 
       - uses: actions/setup-python@v5
-        if: steps.dedupe.outputs.skip != 'true'
         with:
           python-version: "3.12"
           cache: pip
 
-      - if: steps.dedupe.outputs.skip != 'true'
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
       - name: Restore Google credentials
-        if: steps.dedupe.outputs.skip != 'true'
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
@@ -68,7 +36,6 @@ jobs:
           chmod 600 credentials.json token.json
 
       - name: Sync pickups, then send the digest
-        if: steps.dedupe.outputs.skip != 'true'
         env:
           VF_USERNAME: ${{ secrets.VF_USERNAME }}
           VF_PASSWORD: ${{ secrets.VF_PASSWORD }}
@@ -81,7 +48,7 @@ jobs:
       # never ran the job at all, since nothing here would be running to notice.
       # Optional: skipped entirely when the secret is not set.
       - name: Ping the dead-man's switch
-        if: steps.dedupe.outputs.skip != 'true' && success()
+        if: success()
         env:
           HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
         run: |
@@ -94,7 +61,7 @@ jobs:
       # Keeps the machine-readable result even when the run failed, which is
       # when you most want to look at it.
       - name: Upload run report
-        if: always() && steps.dedupe.outputs.skip != 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: last-run-report
